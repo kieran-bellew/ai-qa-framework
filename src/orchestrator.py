@@ -157,7 +157,10 @@ class Orchestrator:
         git_context_data: dict[str, str] | None = None
         if self.config.git_context and self.config.git_context.repo:
             logger.info("Extracting git context from %s ...", self.config.git_context.repo)
-            provider = GitContextProvider(self.config.git_context)
+            provider = GitContextProvider(
+                self.config.git_context,
+                max_context_chars=self.config.git_context_max_chars,
+            )
             git_context_data = provider.extract()
             logger.info("Git context extracted (%d chars readme, %d chars diff)",
                         len(git_context_data.get("readme", "")),

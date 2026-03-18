@@ -150,6 +150,7 @@ class FrameworkConfig(BaseModel):
 
     # Git context (optional)
     git_context: Optional[GitContext] = None
+    git_context_max_chars: int = 8000
 
     def model_post_init(self, __context) -> None:
         if not self.crawl.target_url:

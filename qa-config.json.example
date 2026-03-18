@@ -69,5 +69,6 @@
   "include_url_patterns": [],
   "exclude_url_patterns": [],
   "hints": [],
-  "git_context": null
+  "git_context": null,
+  "git_context_max_chars": 8000
 }
