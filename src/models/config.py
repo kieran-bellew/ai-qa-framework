@@ -123,6 +123,7 @@ class FrameworkConfig(BaseModel):
         "Unrecognized feature",
         "crbug.com",
         "violates the following Content Security Policy",
+        "single-spa",
     ])
 
     # Coverage settings

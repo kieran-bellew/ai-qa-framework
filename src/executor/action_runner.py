@@ -183,6 +183,11 @@ async def run_action(
                 page, action.selector, timeout, "fill", smart_resolve, selector_cache)
             logger.debug("Filling %s with '%s'", effective,
                          "***" if "password" in (action.selector or "").lower() else action.value)
+            # Click first to ensure focus (Angular Material inputs need activation)
+            try:
+                await page.click(effective, timeout=min(3000, timeout))
+            except Exception:
+                pass
             await page.fill(effective, action.value or "", timeout=timeout)
 
         case "select":
