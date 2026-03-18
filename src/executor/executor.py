@@ -7,6 +7,7 @@ import logging
 import time
 import uuid
 from pathlib import Path
+from typing import Any
 
 from playwright.async_api import async_playwright
 
@@ -103,6 +104,12 @@ class Executor:
             auth_lock = asyncio.Lock()
             auth_state: dict[str, dict | None] = {"storage": auth_storage_state}
 
+            # Post-auth state cache: captures browser state after post-auth actions
+            # so subsequent tests skip the replay entirely (~15-20s savings per test).
+            self._post_auth_cache: dict[str, Any] = {}
+            self._post_auth_cache_lock = asyncio.Lock()
+            self._post_auth_cache_ready = asyncio.Event()
+
             async def _run_one(index: int, tc: TestCase) -> TestResult:
                 async with semaphore:
                     elapsed = time.time() - start_time
@@ -122,7 +129,13 @@ class Executor:
                                  tc.test_id, tc.target_page_id, tc.timeout_seconds,
                                  tc.requires_auth)
 
-                    storage = auth_state["storage"] if (tc.requires_auth and self.config.auth) else None
+                    # Use post-auth cached storage if available (includes
+                    # cookies/localStorage from AFTER context selection)
+                    if tc.requires_auth and self.config.auth:
+                        cached = self._post_auth_cache
+                        storage = cached.get("storage_state") or auth_state["storage"]
+                    else:
+                        storage = None
                     capture_mode = self.config.capture_video
 
                     # For "always" mode, prepare video dir before context creation
@@ -185,11 +198,14 @@ class Executor:
                             rerun_video_dir = rerun_evidence_dir / "video"
                             rerun_video_dir.mkdir(parents=True, exist_ok=True)
 
+                            # Use fresh auth state (not the stale closure variable)
+                            # in case session was re-captured after invalidation
+                            rerun_storage = auth_state["storage"] if (tc.requires_auth and self.config.auth) else None
                             video_context = await create_stealth_context(
                                 browser,
                                 viewport={"width": 1280, "height": 720},
                                 user_agent=self.config.crawl.user_agent,
-                                storage_state=storage,
+                                storage_state=rerun_storage,
                                 record_video_dir=str(rerun_video_dir),
                             )
                             try:
@@ -274,6 +290,93 @@ class Executor:
                 return True
         return False
 
+    async def _execute_post_auth(self, page, context) -> None:
+        """Run post-auth actions, using cached state when available.
+
+        The first test does the full replay and caches the resulting browser
+        state. Subsequent tests restore from cache (~0.5s vs ~15-20s).
+        """
+        # Fast path: use cached state
+        if self._post_auth_cache:
+            try:
+                cached = self._post_auth_cache
+                # Inject cached sessionStorage
+                if cached.get("session_storage"):
+                    await page.goto(
+                        cached["final_url"],
+                        wait_until="domcontentloaded",
+                        timeout=15000,
+                    )
+                    await page.evaluate("""(entries) => {
+                        for (const [k, v] of entries) sessionStorage.setItem(k, v);
+                    }""", cached["session_storage"])
+                    await page.reload(wait_until="domcontentloaded", timeout=15000)
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        await page.wait_for_timeout(2000)
+                else:
+                    await page.goto(
+                        cached["final_url"],
+                        wait_until="domcontentloaded",
+                        timeout=15000,
+                    )
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        await page.wait_for_timeout(2000)
+
+                # Validate: check we're not back on a login/gateway page
+                current_url = page.url
+                if "/login" not in current_url and current_url != self.config.target_url:
+                    logger.debug("Post-auth cache hit: navigated to %s", current_url)
+                    return
+                logger.debug("Post-auth cache invalid (landed on %s), falling back to replay", current_url)
+            except Exception as e:
+                logger.debug("Post-auth cache restore failed: %s, falling back", e)
+
+        # Slow path: full replay (first test or cache miss)
+        # Use lock so only one test does the full replay while others wait
+        async with self._post_auth_cache_lock:
+            if self._post_auth_cache:
+                # Another test populated the cache while we waited
+                await self._execute_post_auth(page, context)
+                return
+
+            from src.utils.post_auth import run_post_auth_actions
+
+            try:
+                await page.goto(
+                    self.config.target_url,
+                    wait_until="domcontentloaded",
+                    timeout=15000,
+                )
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=10000)
+                except Exception:
+                    await page.wait_for_timeout(2000)
+            except Exception as e:
+                logger.debug("Post-auth navigation failed: %s", e)
+
+            await run_post_auth_actions(page, self.config.auth.post_auth_actions)
+
+            # Cache the resulting state for subsequent tests
+            try:
+                storage_state = await context.storage_state()
+                session_storage = await page.evaluate(
+                    "() => Object.keys(sessionStorage).map(k => [k, sessionStorage.getItem(k)])"
+                )
+                self._post_auth_cache = {
+                    "storage_state": storage_state,
+                    "final_url": page.url,
+                    "session_storage": session_storage,
+                }
+                self._post_auth_cache_ready.set()
+                logger.info("Post-auth state cached (url=%s, %d session keys)",
+                           page.url, len(session_storage))
+            except Exception as e:
+                logger.debug("Failed to cache post-auth state: %s", e)
+
     async def _run_test(
         self, context, test_case: TestCase, baseline_dir: Path | None,
     ) -> TestResult:
@@ -311,25 +414,7 @@ class Executor:
             # Navigate through multi-step entry flows (context selectors, etc.)
             # so the test starts inside the actual app, not on a gateway page.
             if tc.requires_auth and self.config.auth and self.config.auth.post_auth_actions:
-                from src.utils.post_auth import run_post_auth_actions
-
-                # Navigate to the app's base URL first so the SPA loads
-                try:
-                    await page.goto(
-                        self.config.target_url,
-                        wait_until="domcontentloaded",
-                        timeout=15000,
-                    )
-                    try:
-                        await page.wait_for_load_state("networkidle", timeout=10000)
-                    except Exception:
-                        await page.wait_for_timeout(2000)
-                except Exception as e:
-                    logger.debug("Post-auth navigation failed: %s", e)
-
-                await run_post_auth_actions(
-                    page, self.config.auth.post_auth_actions,
-                )
+                await self._execute_post_auth(page, context)
 
             # === PRECONDITIONS ===
             if tc.preconditions:

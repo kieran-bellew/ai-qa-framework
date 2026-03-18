@@ -142,8 +142,10 @@ class CoverageRegistryManager:
                 jc.last_result = test_result.result
                 jc.test_count += 1
 
-        # Recalculate global stats
+        # Recalculate global stats and trending
         self._recalculate_stats(registry)
+        from src.coverage.trending import update_signature_trends
+        update_signature_trends(registry)
 
         return registry
 

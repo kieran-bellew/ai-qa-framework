@@ -25,6 +25,10 @@ class InteractionCrawlConfig(BaseModel):
     skip_text_patterns: list[str] = Field(default_factory=lambda: [
         "delete", "remove", "logout", "sign out", "cancel",
     ])
+    enable_scroll_discovery: bool = True
+    enable_grid_interaction: bool = True
+    enable_form_fill: bool = False  # Off by default — forms are side-effectful
+    grid_states_per_page: int = 5  # Max grid interaction states per page
 
 
 class CrawlConfig(BaseModel):

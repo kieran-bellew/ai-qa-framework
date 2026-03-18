@@ -21,6 +21,9 @@ class SignatureRecord(BaseModel):
     last_result: str = ""
     test_count: int = 0
     history: list[TestResultSummary] = Field(default_factory=list)
+    flaky_score: float = 0.0  # 0.0 = stable, 1.0 = always flaky
+    reliability_score: float = 1.0  # pass rate over last N runs
+    trend: str = "stable"  # stable | improving | degrading | regression | flaky
 
 
 class ElementCoverage(BaseModel):

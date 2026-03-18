@@ -70,6 +70,19 @@ def analyze_gaps(
     if low_coverage_areas:
         suggested_focus.append(f"Improve {len(low_coverage_areas)} low-coverage areas")
 
+    # Flag flaky and unreliable tests from trending data
+    for page_cov in registry.pages.values():
+        for cat_cov in page_cov.categories.values():
+            for sig in cat_cov.signatures_tested:
+                if sig.flaky_score > 0.3:
+                    suggested_focus.append(
+                        f"Stabilize flaky test: {sig.signature} (flaky_score={sig.flaky_score})"
+                    )
+                if sig.trend == "regression":
+                    suggested_focus.append(
+                        f"Investigate regression: {sig.signature}"
+                    )
+
     # Detect untested state transitions
     if site_model.state_graph:
         tested_transitions: set[tuple[str, str]] = set()

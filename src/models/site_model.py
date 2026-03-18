@@ -78,6 +78,9 @@ class PageModel(BaseModel):
     fingerprint: str = ""  # state fingerprint hash (empty = URL-only mode)
     parent_page_id: str = ""  # state we navigated from
     trigger_action: Optional[dict] = None  # action that led here: {action_type, selector, description}
+    classification: str = ""  # AI-derived: data_grid, form_page, dashboard, settings, wizard, etc.
+    test_strategies: list[str] = Field(default_factory=list)  # AI-suggested: pagination, sort_columns, etc.
+    page_description: str = ""  # AI-generated one-sentence description
 
 
 class SiteModel(BaseModel):

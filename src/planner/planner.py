@@ -256,6 +256,10 @@ class Planner:
                     if e.is_interactive
                 ],
             }
+            if page.classification:
+                page_summary["classification"] = page.classification
+                page_summary["test_strategies"] = page.test_strategies
+                page_summary["page_description"] = page.page_description
             if page.fingerprint:
                 page_summary["fingerprint"] = page.fingerprint
                 page_summary["parent_page_id"] = page.parent_page_id

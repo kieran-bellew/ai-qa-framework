@@ -250,6 +250,27 @@ class InteractionCrawler:
                     if not await self._navigate_to_state(page, current_url, action_chain):
                         logger.debug("Failed to restore state %s, moving to next state", current_sid)
                         break
+
+                # --- Additional interaction strategies ---
+
+                # Scroll discovery: scroll to bottom to trigger lazy loading
+                if self.interaction_config.enable_scroll_discovery:
+                    if len(visited_fingerprints) < max_states:
+                        await self._scroll_discover(
+                            page, current_sid, current_url, action_chain, depth,
+                            visited_fingerprints, state_graph, new_pages, queue,
+                            max_states,
+                        )
+
+                # Grid interaction: sort columns, paginate, expand rows
+                if self.interaction_config.enable_grid_interaction:
+                    if len(visited_fingerprints) < max_states:
+                        await self._grid_discover(
+                            page, current_sid, current_url, action_chain, depth,
+                            visited_fingerprints, state_graph, new_pages, queue,
+                            skip_patterns, max_states,
+                        )
+
         finally:
             if owns_page:
                 await page.close()
@@ -292,6 +313,163 @@ class InteractionCrawler:
                 return False
 
         return True
+
+    async def _scroll_discover(
+        self, page, current_sid, current_url, action_chain, depth,
+        visited_fingerprints, state_graph, new_pages, queue, max_states,
+    ) -> None:
+        """Scroll to bottom to trigger lazy-loaded content."""
+        try:
+            pre_fp = await fingerprint_state(page)
+            for scroll_round in range(3):
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                await page.wait_for_timeout(1500)
+
+                fp = await fingerprint_state(page)
+                if fp != pre_fp and fp not in visited_fingerprints:
+                    new_url = page.url
+                    target_sid = state_id_from_fingerprint(new_url, fp)
+                    visited_fingerprints[fp] = target_sid
+
+                    elements = await extract_elements(page)
+                    forms = await analyze_forms(page)
+
+                    action_info = {
+                        "action_type": "scroll",
+                        "selector": "",
+                        "description": f"Scroll to bottom (round {scroll_round + 1})",
+                    }
+                    new_pages.append(PageModel(
+                        page_id=target_sid, url=new_url,
+                        page_type="interactive",
+                        title=await page.title() or "",
+                        elements=elements, forms=forms,
+                        fingerprint=fp, parent_page_id=current_sid,
+                        trigger_action=action_info,
+                    ))
+                    state_graph.setdefault(current_sid, []).append({
+                        "target_state_id": target_sid, "action": action_info,
+                    })
+                    state_graph[target_sid] = []
+                    logger.info("New state from scroll: %s", target_sid)
+                    break
+                elif fp == pre_fp:
+                    break  # No new content loaded
+                pre_fp = fp
+        except Exception as e:
+            logger.debug("Scroll discovery failed: %s", e)
+        finally:
+            await page.evaluate("window.scrollTo(0, 0)")
+
+    async def _grid_discover(
+        self, page, current_sid, current_url, action_chain, depth,
+        visited_fingerprints, state_graph, new_pages, queue,
+        skip_patterns, max_states,
+    ) -> None:
+        """Interact with data grids: sort columns, paginate."""
+        grid_budget = self.interaction_config.grid_states_per_page
+        grid_found = 0
+
+        try:
+            grid_actions = await page.evaluate("""() => {
+                const results = [];
+
+                // Sort headers
+                document.querySelectorAll(
+                    '[mat-sort-header], th[sortable], [role="columnheader"][aria-sort], ' +
+                    '.ag-header-cell-sortable, .p-sortable-column'
+                ).forEach(el => {
+                    if (el.offsetParent === null) return;
+                    let sel = '';
+                    if (el.id) sel = '#' + CSS.escape(el.id);
+                    else if (el.getAttribute('mat-sort-header'))
+                        sel = '[mat-sort-header="' + el.getAttribute('mat-sort-header') + '"]';
+                    if (sel) results.push({
+                        selector: sel,
+                        text: (el.textContent || '').trim().substring(0, 40),
+                        type: 'sort',
+                    });
+                });
+
+                // Pagination buttons
+                document.querySelectorAll(
+                    '.mat-mdc-paginator-navigation-next, .mat-paginator-navigation-next, ' +
+                    '.p-paginator-next, [aria-label="Next page"], ' +
+                    'button.next-page, [class*="paginator"] button:last-of-type'
+                ).forEach(el => {
+                    if (el.offsetParent === null || el.disabled) return;
+                    let sel = '';
+                    if (el.id) sel = '#' + CSS.escape(el.id);
+                    else if (el.getAttribute('aria-label'))
+                        sel = '[aria-label="' + el.getAttribute('aria-label') + '"]';
+                    else if (el.className && typeof el.className === 'string') {
+                        const cls = el.className.trim().split(/\\s+/)[0];
+                        if (cls) sel = 'button.' + CSS.escape(cls);
+                    }
+                    if (sel) results.push({selector: sel, text: 'Next page', type: 'paginate'});
+                });
+
+                return results.slice(0, 10);
+            }""")
+
+            if not grid_actions:
+                return
+
+            logger.debug("Found %d grid interactions", len(grid_actions))
+
+            for action in grid_actions:
+                if grid_found >= grid_budget or len(visited_fingerprints) >= max_states:
+                    break
+
+                selector = action.get("selector", "")
+                text = action.get("text", "")
+
+                if self._is_unsafe(text, selector, skip_patterns):
+                    continue
+
+                pre_fp = await fingerprint_state(page)
+                try:
+                    await self._dismiss_overlays(page)
+                    await page.click(selector, timeout=3000)
+                    await self._wait_for_stable(page)
+
+                    fp = await fingerprint_state(page)
+                    if fp != pre_fp and fp not in visited_fingerprints:
+                        new_url = page.url
+                        target_sid = state_id_from_fingerprint(new_url, fp)
+                        visited_fingerprints[fp] = target_sid
+
+                        elements = await extract_elements(page)
+                        forms = await analyze_forms(page)
+                        action_info = {
+                            "action_type": "click",
+                            "selector": selector,
+                            "description": f"Grid: {action['type']} {text}",
+                        }
+                        new_pages.append(PageModel(
+                            page_id=target_sid, url=new_url,
+                            page_type="interactive",
+                            title=await page.title() or "",
+                            elements=elements, forms=forms,
+                            fingerprint=fp, parent_page_id=current_sid,
+                            trigger_action=action_info,
+                        ))
+                        state_graph.setdefault(current_sid, []).append({
+                            "target_state_id": target_sid, "action": action_info,
+                        })
+                        state_graph[target_sid] = []
+                        grid_found += 1
+                        logger.info("New grid state: %s via '%s %s'",
+                                   target_sid, action["type"], text[:30])
+                except Exception as e:
+                    logger.debug("Grid interaction failed [%s]: %s", selector, e)
+
+                # Restore state
+                if not await self._navigate_to_state(page, current_url, action_chain):
+                    break
+
+        except Exception as e:
+            logger.debug("Grid discovery failed: %s", e)
 
     async def _find_clickables(self, page: Page) -> list[dict]:
         """Find visible interactive elements on the page.
