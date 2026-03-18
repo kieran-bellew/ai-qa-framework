@@ -183,9 +183,21 @@ class Planner:
             git_context_data=git_context_data,
         )
 
+        # Collect page screenshots for vision-assisted planning
+        screenshots = self._collect_screenshots(site_model, max_images=15)
+
         try:
-            plan_data = self.ai_client.complete_json(
-                system_prompt=PLANNING_SYSTEM_PROMPT,
+            if screenshots:
+                logger.info("Planning with %d page screenshots", len(screenshots))
+                plan_data = self.ai_client.complete_json_with_images(
+                    system_prompt=PLANNING_SYSTEM_PROMPT,
+                    user_message=user_message,
+                    images=screenshots,
+                    max_tokens=self.config.ai_max_planning_tokens,
+                )
+            else:
+                plan_data = self.ai_client.complete_json(
+                    system_prompt=PLANNING_SYSTEM_PROMPT,
                 user_message=user_message,
                 max_tokens=self.config.ai_max_planning_tokens,
             )
@@ -215,6 +227,7 @@ class Planner:
             "pages": [],
             "api_endpoints_count": len(site_model.api_endpoints),
             "has_auth": site_model.auth_flow is not None,
+            "is_spa": site_model.crawl_metadata.get("is_spa", False),
         }
 
         for page in site_model.pages[:30]:  # Limit pages
@@ -459,6 +472,58 @@ class Planner:
             test_cases=test_cases[:self.config.max_tests_per_run],
             estimated_duration_seconds=len(test_cases) * 10,
         )
+
+    @staticmethod
+    def _collect_screenshots(
+        site_model: SiteModel, max_images: int = 15,
+    ) -> list[tuple[str, str]]:
+        """Collect and resize page screenshots for vision-assisted planning.
+
+        Returns list of (base64_jpeg, caption) tuples.
+        """
+        import base64
+        from pathlib import Path
+
+        try:
+            from PIL import Image
+            import io
+        except ImportError:
+            return []
+
+        results = []
+        # Prioritize pages with forms, then interactive states, then others
+        pages_sorted = sorted(
+            site_model.pages,
+            key=lambda p: (
+                len(p.forms) > 0,  # Forms first
+                p.page_type == "interactive",
+                bool(p.fingerprint),
+            ),
+            reverse=True,
+        )
+
+        for page in pages_sorted[:max_images]:
+            path = page.screenshot_path
+            if not path or not Path(path).exists():
+                continue
+            try:
+                img = Image.open(path)
+                # Resize to ~400px wide for token efficiency
+                if img.width > 400:
+                    ratio = 400 / img.width
+                    img = img.resize(
+                        (400, int(img.height * ratio)),
+                        Image.LANCZOS,
+                    )
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=60)
+                b64 = base64.b64encode(buf.getvalue()).decode()
+                caption = f"Page: {page.title or page.url} (page_id={page.page_id})"
+                results.append((b64, caption))
+            except Exception:
+                continue
+
+        return results
 
     def _append_security_tests(self, site_model: SiteModel, plan: TestPlan) -> TestPlan:
         """Run a separate security planning pass and append results."""

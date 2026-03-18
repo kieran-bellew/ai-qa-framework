@@ -104,10 +104,67 @@ async def run_action(
             logger.debug("Navigating to %s...", url)
             await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
             try:
-                logger.debug("Waiting for network idle...")
                 await page.wait_for_load_state("networkidle", timeout=min(timeout, 10000))
             except Exception:
                 logger.debug("Network idle timeout, continuing")
+
+        case "spa_navigate":
+            # Navigate within an SPA by clicking a nav link rather than
+            # doing page.goto() which re-bootstraps the app and kills
+            # router state + in-memory auth tokens.
+            url = action.value or action.selector or ""
+            from urllib.parse import urlparse
+            target_path = urlparse(url).path.rstrip("/") or "/"
+
+            # Try to find and click a nav link matching the target path
+            nav_selector = await page.evaluate("""(targetPath) => {
+                // Search for links with matching href or routerLink
+                const candidates = document.querySelectorAll(
+                    'a[href], a[routerLink], a[routerlink], [routerLink], [routerlink]'
+                );
+                for (const el of candidates) {
+                    const href = el.getAttribute('href') || '';
+                    const rl = el.getAttribute('routerLink') || el.getAttribute('routerlink') || '';
+                    const match = [href, rl].some(v => {
+                        const clean = v.replace(/^#/, '').replace(/\\?.*$/, '').replace(/\\/$/, '');
+                        return clean === targetPath || clean === targetPath.replace(/^\\//,'');
+                    });
+                    if (match && el.offsetParent !== null) {
+                        if (el.id) return '#' + CSS.escape(el.id);
+                        if (el.getAttribute('data-testid'))
+                            return '[data-testid="' + el.getAttribute('data-testid') + '"]';
+                        if (el.getAttribute('routerLink'))
+                            return '[routerLink="' + el.getAttribute('routerLink') + '"]';
+                        if (el.getAttribute('routerlink'))
+                            return '[routerlink="' + el.getAttribute('routerlink') + '"]';
+                        return null;
+                    }
+                }
+                return null;
+            }""", target_path)
+
+            if nav_selector:
+                logger.debug("SPA navigate: clicking '%s' for %s", nav_selector, target_path)
+                await page.click(nav_selector, timeout=timeout)
+                try:
+                    await page.wait_for_url(
+                        lambda u: target_path in urlparse(u).path,
+                        timeout=timeout,
+                    )
+                except Exception:
+                    pass
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=5000)
+                except Exception:
+                    await page.wait_for_timeout(1000)
+            else:
+                # Fallback to regular navigation
+                logger.debug("SPA navigate: no nav link found for %s, falling back to goto", target_path)
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=min(timeout, 10000))
+                except Exception:
+                    pass
 
         case "click":
             if not action.selector:

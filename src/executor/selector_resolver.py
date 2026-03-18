@@ -150,6 +150,26 @@ def _derive_alternatives(original_selector: str, action_type: str) -> list[tuple
     text_match = re.search(r"text[=~]*['\"]([^'\"]+)['\"]", original_selector, re.IGNORECASE)
     has_text_match = re.search(r":has-text\(['\"]([^'\"]+)['\"]\)", original_selector)
 
+    # Playwright role/text/label selectors (more resilient than CSS)
+    if aria_label_match:
+        label = aria_label_match.group(1)
+        # Try role-based selectors with the aria-label as name
+        for role in ("button", "link", "textbox", "combobox", "tab", "menuitem"):
+            _add(f"role_{role}", f'role={role}[name="{label}"]')
+        _add("label_selector", f"label={label}")
+
+    if has_text_match or text_match:
+        text = (has_text_match or text_match).group(1)
+        if action_type in ("click", "hover"):
+            _add("text_exact", f"text={text}")
+
+    if placeholder_match:
+        _add("placeholder_selector", f'[placeholder="{placeholder_match.group(1)}"]')
+
+    if name_match:
+        name = name_match.group(1)
+        _add("label_by_name", f"label={name}")
+
     # Broaden by ID (drop tag qualifier)
     if id_match:
         _add("id_only", f"#{id_match.group(1)}")

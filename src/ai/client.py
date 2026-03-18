@@ -322,6 +322,77 @@ class AIClient:
             )
             raise
 
+    def complete_json_with_images(
+        self,
+        system_prompt: str,
+        user_message: str,
+        images: list[tuple[str, str]],  # [(base64_data, caption), ...]
+        max_tokens: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Send a completion request with multiple images and parse as JSON.
+
+        Each image is a (base64_data, caption) tuple. Images are interleaved
+        with caption text in the message content blocks.
+        """
+        self._call_count += 1
+        tokens = max_tokens or self.max_tokens
+        logger.info(
+            "Calling AI with %d images (call #%d, model=%s)...",
+            len(images), self._call_count, self.model,
+        )
+
+        content_blocks = []
+        for img_b64, caption in images:
+            content_blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": "image/jpeg",
+                    "data": img_b64,
+                },
+            })
+            if caption:
+                content_blocks.append({"type": "text", "text": caption})
+        content_blocks.append({"type": "text", "text": user_message})
+
+        try:
+            call_start = time.time()
+            if self.provider == "bedrock":
+                response = self._call_with_retry(
+                    lambda: self.client.messages.create(
+                        model=self.model,
+                        max_tokens=tokens,
+                        system=system_prompt,
+                        messages=[{"role": "user", "content": content_blocks}],
+                    ),
+                    call_label=f"complete_json_with_images (call #{self._call_count})",
+                )
+                text = response.content[0].text
+            else:
+                # Ollama: use first image only
+                img_b64 = images[0][0] if images else None
+                text = self._ollama_chat(
+                    system_prompt=system_prompt,
+                    user_message=user_message,
+                    max_tokens=tokens,
+                    temperature=0.2,
+                    image_base64=img_b64,
+                )
+            call_duration = time.time() - call_start
+            logger.info("AI image response received in %.1fs (%d chars)",
+                        call_duration, len(text))
+            self._save_exchange_log(
+                call_number=self._call_count,
+                system_prompt=system_prompt,
+                user_message=f"[{len(images)} IMAGES ATTACHED]\n{user_message}",
+                response_text=text,
+                error=None,
+            )
+            return self._parse_json_response(text)
+        except Exception as e:
+            logger.error("AI provider error with images: %s", e)
+            raise
+
     # ------------------------------------------------------------------
     # JSON parsing with LLM quirk handling
     # ------------------------------------------------------------------

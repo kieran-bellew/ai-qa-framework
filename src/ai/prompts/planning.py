@@ -30,7 +30,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
       "requires_auth": true,
       "preconditions": [
         {
-          "action_type": "navigate | click | fill | select | hover | scroll | wait | screenshot | keyboard",
+          "action_type": "navigate | spa_navigate | click | fill | select | hover | scroll | wait | screenshot | keyboard",
           "selector": "string or null",
           "value": "string or null",
           "description": "string"
@@ -58,8 +58,9 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
 1. **Functional tests:** Test form submissions (valid and invalid data), navigation, CRUD operations, search/filter, pagination, modals, multi-step workflows, and auth flows.
 2. **Visual tests:** Use screenshot_diff assertions to compare against baselines. IMPORTANT: Always add a wait step of at least 2000ms before screenshot assertions to allow fonts, images, and animations to fully load. Use element_visible assertions to verify key elements are present. Test responsive behavior across viewports. For screenshot_diff assertions, set tolerance to null (uses default 0.05).
 3. **Security tests:** Inject XSS payloads into form fields and verify sanitization. Check HTTPS enforcement, cookie security attributes, open redirect vectors, and error page information leakage.
-4. **Prioritization:** Forms and interactive elements get higher priority. Static pages get lower priority. Recently failed areas get highest priority.
-5. **Selectors:** Prefer data-testid attributes, then ARIA roles/labels, then stable CSS selectors. Avoid fragile positional selectors.
+4. **Prioritization:** Follow the Coverage Priorities section strictly — untested pages MUST get test cases before generating tests for well-covered pages. Recently failed areas get highest priority. Forms and interactive elements get higher priority than static pages.
+5. **Selectors:** Prefer these strategies in order: (1) `data-testid` attributes, (2) Playwright role selectors like `role=button[name="Submit"]`, (3) label selectors like `label=Email`, (4) `text=Submit` for buttons/links, (5) stable CSS selectors with ARIA attributes. Avoid fragile positional selectors and dynamic IDs (e.g., `mat-select-47`, `cdk-overlay-3`).
+   - For SPA apps (when `is_spa: true`), use `spa_navigate` instead of `navigate` for in-app page transitions. The `spa_navigate` action clicks an in-app navigation link rather than doing a full page reload. Use `navigate` only for the initial page load.
 6. **Test data:** Generate realistic test data for form fills. Use invalid data for negative tests (empty required fields, malformed emails, XSS payloads for security). When a field needs a unique value (e.g., usernames, IDs, vault names), use the dynamic variable `{{$timestamp}}` in the value string (e.g., `"testuser-{{$timestamp}}"`) — it will be replaced with a Unix epoch timestamp at runtime to ensure uniqueness.
 7. **Budget:** Respect the max_tests limit. Allocate budget proportionally: ~50% functional, ~30% visual, ~20% security (adjustable by hints).
 8. **Assertion robustness:** Prefer behavioral/structural assertions over text matching. This is critical for reliable tests.
@@ -117,6 +118,67 @@ Key fields on state pages:
 Generate thorough but focused tests. Each test should verify one specific behavior."""
 
 
+def _format_coverage_priorities(coverage_gaps_json: str, max_tests: int) -> str:
+    """Convert raw coverage gap JSON into structured priority instructions."""
+    import json as _json
+
+    try:
+        gaps = _json.loads(coverage_gaps_json)
+    except Exception:
+        return f"## Coverage Gaps\n\n```json\n{coverage_gaps_json}\n```\n"
+
+    untested = gaps.get("untested_pages", [])
+    stale = gaps.get("stale_pages", [])
+    failures = gaps.get("recent_failures", [])
+    low_coverage = gaps.get("low_coverage_areas", [])
+    focus = gaps.get("suggested_focus", [])
+
+    if not any([untested, stale, failures, low_coverage]):
+        return "## Coverage Priorities\n\nNo previous test data — generate a balanced test plan.\n"
+
+    lines = ["## Coverage Priorities\n"]
+    lines.append("Use these priorities to allocate your test budget:\n")
+
+    if untested:
+        budget = min(max(2, max_tests * 4 // 10), len(untested) * 2)
+        page_ids = ", ".join(untested[:10])
+        lines.append(
+            f"### MUST TEST (Priority 1) — {len(untested)} untested pages\n"
+            f"Allocate at least {budget} test cases for these pages: `{page_ids}`\n"
+            f"These have NEVER been tested.\n"
+        )
+
+    if failures:
+        sigs = [f[1] if isinstance(f, (list, tuple)) else str(f) for f in failures[:8]]
+        lines.append(
+            f"### SHOULD RE-TEST (Priority 2) — {len(failures)} recent failures\n"
+            f"These tests failed recently. Generate improved tests with better selectors:\n"
+            f"{chr(10).join(f'- {s}' for s in sigs)}\n"
+        )
+
+    if stale:
+        lines.append(
+            f"### REFRESH (Priority 3) — {len(stale)} stale pages\n"
+            f"These pages haven't been tested recently: {', '.join(stale[:10])}\n"
+        )
+
+    if low_coverage:
+        areas = [f"{lc[0]}:{lc[1]} ({lc[2]:.0%})" if isinstance(lc, (list, tuple)) and len(lc) >= 3 else str(lc) for lc in low_coverage[:5]]
+        lines.append(
+            f"### LOW COVERAGE — {len(low_coverage)} areas below threshold\n"
+            f"{chr(10).join(f'- {a}' for a in areas)}\n"
+        )
+
+    if focus:
+        lines.append(
+            "### Suggested Focus\n"
+            + "\n".join(f"- {f}" for f in focus[:8])
+            + "\n"
+        )
+
+    return "\n".join(lines)
+
+
 def build_planning_prompt(
     site_model_json: str,
     coverage_gaps_json: str,
@@ -126,9 +188,12 @@ def build_planning_prompt(
     git_context_data: dict[str, str] | None = None,
 ) -> str:
     """Build the user message for the planning AI call."""
+    # Format coverage gaps as priority instructions
+    coverage_section = _format_coverage_priorities(coverage_gaps_json, max_tests)
+
     parts = [
         f"## Site Model\n\n```json\n{site_model_json}\n```\n",
-        f"## Coverage Gaps\n\n```json\n{coverage_gaps_json}\n```\n",
+        coverage_section,
         f"## Configuration\n\n{config_summary}\n",
         f"## Budget\n\nGenerate up to {max_tests} test cases.\n",
     ]

@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "target_url": "https://kevin-291-rc-1-val.4gclinical.com",
+  "mappings": [
+    {
+      "original_selector": "[name='mat-input-17']",
+      "replacement_selector": "input[matinput][aria-label*='filter' i], input[matinput][placeholder*='filter' i], .mat-mdc-input-element, input.mat-input-element, input[id^='mat-input']",
+      "page_url_pattern": "/reports/depot_inventory_detail",
+      "action_type": "fill",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T16:06:38Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    },
+    {
+      "original_selector": "[name='mat-input-0']",
+      "replacement_selector": "input[placeholder='Select Shipment'], input[role='combobox'], .mat-mdc-input-element, input.mat-input-element",
+      "page_url_pattern": "/reports/shipment_details_report",
+      "action_type": "fill",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T16:13:44Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    },
+    {
+      "original_selector": "[name='mat-input-0']",
+      "replacement_selector": "input[placeholder='Select Site'], input[aria-label*='Site'], input[type='text'][class*='mat-input']",
+      "page_url_pattern": "/reports/accountability_details",
+      "action_type": "fill",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T16:13:44Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    },
+    {
+      "original_selector": "[name='mat-input-0']",
+      "replacement_selector": "input[placeholder='Select Site'], input[aria-label*='Site'], .mat-input-element, input.mat-mdc-input-element",
+      "page_url_pattern": "/reports/accountability_details",
+      "action_type": "fill",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T16:14:51Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    }
+  ],
+  "updated_at": "2026-03-18T16:20:53Z"
+}

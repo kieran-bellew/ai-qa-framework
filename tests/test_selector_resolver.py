@@ -40,12 +40,14 @@ class TestDeriveAlternatives:
     def test_extracts_text_selector(self):
         alts = _derive_alternatives("text='Submit Order'", "click")
         strategy_names = [a[0] for a in alts]
-        assert "text_selector" in strategy_names
+        # text_exact (Playwright locator) or text_selector (legacy)
+        assert "text_exact" in strategy_names or "text_selector" in strategy_names
 
     def test_extracts_has_text_for_click(self):
         alts = _derive_alternatives("button:has-text('Add to Cart')", "click")
         strategy_names = [a[0] for a in alts]
-        assert "has_text" in strategy_names
+        # text_exact (Playwright locator) or has_text (legacy)
+        assert "text_exact" in strategy_names or "has_text" in strategy_names
         selectors = [a[1] for a in alts]
         assert "text=Add to Cart" in selectors
 

@@ -339,8 +339,20 @@ class Executor:
         # Use lock so only one test does the full replay while others wait
         async with self._post_auth_cache_lock:
             if self._post_auth_cache:
-                # Another test populated the cache while we waited
-                await self._execute_post_auth(page, context)
+                # Another test populated the cache while we waited — use fast path
+                # (non-recursive: just navigate to cached URL)
+                try:
+                    await page.goto(
+                        self._post_auth_cache["final_url"],
+                        wait_until="domcontentloaded",
+                        timeout=15000,
+                    )
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=5000)
+                    except Exception:
+                        await page.wait_for_timeout(2000)
+                except Exception:
+                    pass
                 return
 
             from src.utils.post_auth import run_post_auth_actions
@@ -415,6 +427,23 @@ class Executor:
             # so the test starts inside the actual app, not on a gateway page.
             if tc.requires_auth and self.config.auth and self.config.auth.post_auth_actions:
                 await self._execute_post_auth(page, context)
+
+            # === STATE VERIFICATION ===
+            # Guard against starting tests in a bad state (login page,
+            # error page, blank page). If detected, retry post-auth.
+            if tc.requires_auth and self.config.auth:
+                current_url = page.url
+                bad_state = (
+                    "about:blank" in current_url
+                    or "/login" in current_url.lower()
+                    or current_url.rstrip("/") == self.config.target_url.rstrip("/")
+                )
+                if bad_state:
+                    logger.warning("Bad starting state (%s), retrying post-auth", current_url)
+                    # Invalidate cache and retry
+                    self._post_auth_cache.clear()
+                    if self.config.auth.post_auth_actions:
+                        await self._execute_post_auth(page, context)
 
             # === PRECONDITIONS ===
             if tc.preconditions:

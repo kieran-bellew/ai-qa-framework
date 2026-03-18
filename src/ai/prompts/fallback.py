@@ -20,6 +20,13 @@ Decision guidelines:
 - skip: Step cannot be completed but test can continue.
 - abort: Test is in unrecoverable state.
 
+When providing new_selector, prefer Playwright locator-style selectors over CSS:
+- role=button[name="Save"] (matches by ARIA role + accessible name)
+- text=Submit (matches by visible text)
+- label=Email (matches input by its label text)
+- [data-testid="save-btn"] (matches by test ID)
+These are more resilient than CSS selectors with dynamic IDs.
+
 Prefer skip over abort. Only abort if the test truly cannot produce meaningful results."""
 
 
