@@ -1,7 +1,7 @@
 [project]
 name = "ai-qa-framework"
 version = "0.1.0"
-requires-python = ">=3.11"
+requires-python = ">=3.14"
 dependencies = [
     "playwright>=1.40.0",
     "anthropic[bedrock]>=0.39.0",
@@ -48,7 +48,7 @@ markers = [
 ]
 
 [tool.ruff]
-target-version = "py312"
+target-version = "py314"
 line-length = 120
 
 [tool.ruff.lint]
