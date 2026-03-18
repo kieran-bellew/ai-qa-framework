@@ -74,6 +74,10 @@ async def check_assertion(
                 return _check_no_console_errors(console_errors, ignore_patterns)
             case "response_status":
                 return _check_response_status(assertion, network_log)
+            case "response_status_check":
+                return _check_response_status_check(assertion, network_log)
+            case "api_response_contains":
+                return _check_api_response_contains(assertion, network_log)
             case "ai_evaluate":
                 return await _check_ai_evaluate(page, assertion, evidence_dir, ai_client)
             case "page_title_contains":
@@ -422,6 +426,47 @@ def _check_response_status(assertion: Assertion, network_log: list[dict] | None)
         if req.get("status") == expected:
             return AssertionResult(True, f"Found response with status {expected}")
     return AssertionResult(False, f"No response with status {expected}")
+
+
+def _check_response_status_check(assertion: Assertion, network_log: list[dict] | None) -> AssertionResult:
+    """Check that a specific API endpoint returned the expected status code.
+
+    selector = URL pattern to match, expected_value = status code.
+    """
+    if not assertion.selector or not assertion.expected_value:
+        return AssertionResult(False, "Need selector (URL pattern) and expected_value (status)")
+    if not network_log:
+        return AssertionResult(False, "No network log available")
+    expected = int(assertion.expected_value)
+    for req in network_log:
+        if assertion.selector in req.get("url", "") and req.get("status") == expected:
+            return AssertionResult(True, f"{assertion.selector} returned {expected}")
+    # Check if the endpoint was called at all
+    matched = [r for r in network_log if assertion.selector in r.get("url", "")]
+    if matched:
+        statuses = [r["status"] for r in matched]
+        return AssertionResult(False, f"{assertion.selector} returned {statuses}, expected {expected}")
+    return AssertionResult(False, f"No request matching {assertion.selector}")
+
+
+def _check_api_response_contains(assertion: Assertion, network_log: list[dict] | None) -> AssertionResult:
+    """Check that an API response body contains expected text.
+
+    selector = URL pattern to match, expected_value = text to find in body.
+    """
+    if not assertion.selector or not assertion.expected_value:
+        return AssertionResult(False, "Need selector (URL pattern) and expected_value (text)")
+    if not network_log:
+        return AssertionResult(False, "No network log available")
+    for req in network_log:
+        if assertion.selector in req.get("url", ""):
+            body = req.get("response_body", "")
+            if body and assertion.expected_value in body:
+                return AssertionResult(True, f"API response contains '{assertion.expected_value[:50]}'")
+    matched = [r for r in network_log if assertion.selector in r.get("url", "")]
+    if matched:
+        return AssertionResult(False, f"API response for {assertion.selector} does not contain '{assertion.expected_value[:50]}'")
+    return AssertionResult(False, f"No API request matching {assertion.selector}")
 
 
 async def _check_ai_evaluate(

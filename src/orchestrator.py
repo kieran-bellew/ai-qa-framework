@@ -196,6 +196,83 @@ class Orchestrator:
         self.visual_baseline_manager.save(visual_registry)
         return result
 
+    def run_rerun_failures(self) -> dict | None:
+        """Re-execute only failed tests from the most recent run."""
+        return asyncio.run(self._run_rerun_failures())
+
+    async def _run_rerun_failures(self) -> dict | None:
+        # Load the latest run result
+        prev_result = self._load_latest_run_result()
+        if prev_result is None:
+            raise FileNotFoundError("No previous run found. Run the full pipeline first.")
+
+        # Load the saved plan
+        plan = self._load_latest_plan()
+
+        # Find failed test IDs
+        failed_ids = {
+            tr.test_id for tr in prev_result.test_results
+            if tr.result in ("fail", "error")
+        }
+        if not failed_ids:
+            logger.info("No failures in previous run — nothing to re-run.")
+            return None
+
+        # Filter plan to only failed tests
+        failed_cases = [tc for tc in plan.test_cases if tc.test_id in failed_ids]
+        rerun_plan = TestPlan(
+            plan_id=f"rerun_{plan.plan_id}",
+            generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            target_url=plan.target_url,
+            test_cases=failed_cases,
+            estimated_duration_seconds=len(failed_cases) * 15,
+        )
+        logger.info("Re-running %d failed tests (out of %d total)",
+                     len(failed_cases), prev_result.total_tests)
+
+        # Execute
+        run_result = await self._execute(rerun_plan)
+        self._save_run_result(run_result)
+
+        # Report
+        registry = self.registry_manager.load()
+        registry = self.registry_manager.update_from_run(registry, run_result)
+        self.registry_manager.save(registry)
+        reports = self._report(run_result, registry, previous_run=prev_result)
+
+        return {
+            "run_id": run_result.run_id,
+            "results": {
+                "total": run_result.total_tests,
+                "passed": run_result.passed,
+                "failed": run_result.failed,
+            },
+            "reports": reports,
+        }
+
+    def _load_latest_run_result(self) -> RunResult | None:
+        """Load the most recent run result from the runs directory."""
+        if not self.runs_dir.exists():
+            return None
+        run_dirs = sorted(
+            [d for d in self.runs_dir.iterdir()
+             if d.is_dir() and (d / "run_result.json").exists()],
+            key=lambda d: d.stat().st_mtime,
+            reverse=True,
+        )
+        if not run_dirs:
+            return None
+        with open(run_dirs[0] / "run_result.json") as f:
+            return RunResult.model_validate(json.load(f))
+
+    def _load_latest_plan(self) -> TestPlan:
+        """Load the most recently saved test plan."""
+        path = self.framework_dir / "latest_plan.json"
+        if not path.exists():
+            raise FileNotFoundError("No saved test plan found. Run the full pipeline first.")
+        with open(path) as f:
+            return TestPlan(**json.load(f))
+
     def run_execute_only(self, plan: TestPlan) -> RunResult:
         """Run only the execution stage with a given plan."""
         return asyncio.run(self._execute(plan))

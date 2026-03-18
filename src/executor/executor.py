@@ -62,6 +62,10 @@ class Executor:
         self._selector_cache.decay()  # Age existing mappings
         logger.debug("Loaded selector cache: %d mappings", len(self._selector_cache.mappings))
 
+        # Logged-in indicator: discovered after first successful post-auth,
+        # used for content-based auth state verification instead of URL matching
+        self._logged_in_selector: str | None = None
+
     async def execute(self, plan: TestPlan, baseline_dir: Path | None = None) -> RunResult:
         """Execute a full test plan and return results.
 
@@ -290,6 +294,56 @@ class Executor:
                 return True
         return False
 
+    async def _is_on_login_page(self, page) -> bool:
+        """Check if the browser is on a login/auth page using content signals."""
+        # Signal 1: Visible password input = login form
+        try:
+            pw = await page.query_selector('input[type="password"]')
+            if pw and await pw.is_visible():
+                return True
+        except Exception:
+            pass
+
+        # Signal 2: Logged-in indicator present = NOT on login page
+        if self._logged_in_selector:
+            try:
+                el = await page.query_selector(self._logged_in_selector)
+                if el and await el.is_visible():
+                    return False
+            except Exception:
+                pass
+
+        # Signal 3: URL matches the configured login URL
+        if self.config.auth and self.config.auth.login_url:
+            current = page.url.rstrip("/").lower()
+            login = self.config.auth.login_url.rstrip("/").lower()
+            if current == login:
+                return True
+
+        return False
+
+    async def _discover_logged_in_indicator(self, page) -> str | None:
+        """Find a selector that indicates the user is logged in."""
+        candidates = [
+            '[data-testid*="user"]', '[data-testid*="avatar"]',
+            '[data-testid*="profile"]', '[e2e-id*="user"]',
+            'a[href*="logout"]', 'a[href*="signout"]',
+            'button:has-text("Log out")', 'button:has-text("Sign out")',
+            '.user-menu', '.profile-menu', 'nav .avatar',
+            '[id*="user_button"]', '[id*="user__button"]',
+        ]
+        for sel in candidates:
+            try:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    logger.debug("Discovered logged-in indicator: %s", sel)
+                    return sel
+            except Exception:
+                continue
+        if self.config.auth and self.config.auth.success_indicator:
+            return self.config.auth.success_indicator
+        return None
+
     async def _execute_post_auth(self, page, context) -> None:
         """Run post-auth actions, using cached state when available.
 
@@ -326,12 +380,11 @@ class Executor:
                     except Exception:
                         await page.wait_for_timeout(2000)
 
-                # Validate: check we're not back on a login/gateway page
-                current_url = page.url
-                if "/login" not in current_url and current_url != self.config.target_url:
-                    logger.debug("Post-auth cache hit: navigated to %s", current_url)
+                # Validate: check we're not on a login/gateway page
+                if not await self._is_on_login_page(page):
+                    logger.debug("Post-auth cache hit: navigated to %s", page.url)
                     return
-                logger.debug("Post-auth cache invalid (landed on %s), falling back to replay", current_url)
+                logger.debug("Post-auth cache invalid (login page detected), falling back to replay")
             except Exception as e:
                 logger.debug("Post-auth cache restore failed: %s, falling back", e)
 
@@ -383,6 +436,10 @@ class Executor:
                     "final_url": page.url,
                     "session_storage": session_storage,
                 }
+                # Discover a "logged in" indicator for future auth state checks
+                if not self._logged_in_selector:
+                    self._logged_in_selector = await self._discover_logged_in_indicator(page)
+
                 self._post_auth_cache_ready.set()
                 logger.info("Post-auth state cached (url=%s, %d session keys)",
                            page.url, len(session_storage))
@@ -435,8 +492,7 @@ class Executor:
                 current_url = page.url
                 bad_state = (
                     "about:blank" in current_url
-                    or "/login" in current_url.lower()
-                    or current_url.rstrip("/") == self.config.target_url.rstrip("/")
+                    or await self._is_on_login_page(page)
                 )
                 if bad_state:
                     logger.warning("Bad starting state (%s), retrying post-auth", current_url)

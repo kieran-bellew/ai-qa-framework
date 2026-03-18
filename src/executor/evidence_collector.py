@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from pathlib import Path
@@ -11,6 +12,9 @@ from playwright.async_api import Page
 from src.models.test_result import Evidence
 
 logger = logging.getLogger(__name__)
+
+_MAX_RESPONSE_BODY_SIZE = 4096
+_MAX_NETWORK_ENTRIES = 200
 
 
 class EvidenceCollector:
@@ -26,17 +30,39 @@ class EvidenceCollector:
     def setup_listeners(self, page: Page) -> None:
         """Attach console and network listeners to a page."""
         def _on_console(msg):
-            # Only capture error and warning types to reduce noise
             if msg.type in ("error", "warning"):
                 self.console_logs.append(f"[{msg.type}] {msg.text}")
 
         page.on("console", _on_console)
-        page.on("response", lambda resp: self.network_log.append({
-            "url": resp.url,
-            "method": resp.request.method,
-            "status": resp.status,
-            "resource_type": resp.request.resource_type,
-        }))
+
+        def _on_response(resp):
+            if len(self.network_log) >= _MAX_NETWORK_ENTRIES:
+                return
+            entry = {
+                "url": resp.url,
+                "method": resp.request.method,
+                "status": resp.status,
+                "resource_type": resp.request.resource_type,
+            }
+            self.network_log.append(entry)
+
+            # Capture response body for API calls (XHR/fetch) asynchronously
+            if resp.request.resource_type in ("xhr", "fetch"):
+                try:
+                    loop = asyncio.get_running_loop()
+
+                    async def _capture_body():
+                        try:
+                            body = await resp.text()
+                            entry["response_body"] = body[:_MAX_RESPONSE_BODY_SIZE]
+                        except Exception:
+                            pass
+
+                    loop.create_task(_capture_body())
+                except RuntimeError:
+                    pass  # No running event loop (sync tests)
+
+        page.on("response", _on_response)
 
     async def take_screenshot(self, page: Page, label: str = "") -> str:
         """Capture a screenshot and return the file path."""

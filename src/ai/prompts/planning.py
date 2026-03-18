@@ -39,7 +39,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
       "steps": [ (same Action schema as preconditions) ],
       "assertions": [
         {
-          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | ai_evaluate | page_title_contains | page_loaded",
+          "assertion_type": "element_visible | element_hidden | text_contains | text_equals | text_matches | url_matches | screenshot_diff | element_count | network_request_made | no_console_errors | response_status | response_status_check | api_response_contains | ai_evaluate | page_title_contains | page_loaded",
           "selector": "string or null",
           "expected_value": "string or null",
           "tolerance": "float or null",
@@ -83,6 +83,39 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
      - `{{auth_password}}` — the test password (use in fill action values for password fields)
      These placeholders will be replaced with real credentials after plan generation. Do NOT invent usernames, passwords, or login URLs — always use these exact placeholder tokens when a test needs to interact with authentication fields.
    - If the site model has `"has_auth": false`, NO authentication credentials are configured. Do NOT generate any test cases that use `{{auth_login_url}}`, `{{auth_username}}`, or `{{auth_password}}` placeholder tokens. Do NOT generate tests that require logging in. Only test publicly accessible pages. If a page has `auth_required: true`, you may test that it redirects unauthenticated users or shows an access-denied state, but do NOT attempt to fill in login forms or navigate to login URLs.
+
+## Workflow Templates by Page Classification
+
+When a page has a `classification` and/or `test_strategies` field, use these templates to generate multi-step workflow tests (not just "navigate + assert loaded"):
+
+### data_grid
+- **Row interaction**: click a row -> verify detail panel/page opens -> verify content -> navigate back
+- **Sort + verify**: click column header -> verify rows reorder -> click again -> verify reverse sort
+- **Pagination**: click next page -> verify different data -> click previous -> verify original data
+
+### form_page
+- **Happy path**: fill all required fields -> submit -> verify success (URL change, element_visible, or ai_evaluate)
+- **Validation**: leave required fields empty -> submit -> verify error messages appear
+- **Edit flow**: open existing record -> modify a field -> save -> verify change persists
+
+### wizard
+- **Full traversal**: complete step 1 -> advance -> step 2 -> advance -> ... -> final submit -> verify completion
+- **Back navigation**: complete step 1 -> advance -> go back -> verify step 1 data preserved
+
+### list_detail
+- **Drill down**: click list item -> verify detail view loads -> verify key fields -> navigate back
+
+### dashboard
+- **Widget interaction**: click a chart/metric -> verify drill-down -> navigate back
+- **Filter**: apply a filter -> verify content updates
+
+### settings
+- **Change + save**: modify a setting -> save -> reload -> verify persistence
+
+### navigation
+- **Menu traversal**: click each nav item -> verify target page loads with expected content
+
+Each workflow test should have 3-8 steps and 2-4 assertions. Assert state at key points in the chain, not just at the end. Use ai_evaluate for complex state verification.
 
 ## Form Interaction Patterns
 

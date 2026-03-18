@@ -87,6 +87,32 @@ def run(config: str, git_repo: str | None, git_branch: str | None, git_commit: s
         console.print(f"  {fmt.upper()} report: [blue]{path}[/blue]")
 
 
+@cli.command("rerun-failures")
+@click.option("--config", "-c", default="qa-config.json", help="Config file path")
+def rerun_failures(config: str) -> None:
+    """Re-run only failed tests from the previous run (skip crawl + plan)."""
+    cfg = FrameworkConfig.load(config)
+    orchestrator = Orchestrator(cfg)
+    try:
+        results = orchestrator.run_rerun_failures()
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        sys.exit(1)
+
+    if results is None:
+        console.print("[green]No failures in previous run — nothing to re-run.[/green]")
+        return
+
+    console.print("\n[bold green]Re-run Complete[/bold green]")
+    table = Table(title="Re-run Results")
+    table.add_column("Metric", style="bold")
+    table.add_column("Value")
+    table.add_row("Total Re-run", str(results["results"]["total"]))
+    table.add_row("Passed", f"[green]{results['results']['passed']}[/green]")
+    table.add_row("Failed", f"[red]{results['results']['failed']}[/red]")
+    console.print(table)
+
+
 @cli.command()
 @click.option("--config", "-c", default="qa-config.json", help="Config file path")
 def crawl(config: str) -> None:
