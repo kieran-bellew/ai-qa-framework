@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.table import Table
 
+from src.git_context import GitContext
 from src.models.config import FrameworkConfig
 from src.models.test_plan import TestPlan
 from src.orchestrator import Orchestrator
@@ -36,9 +37,25 @@ def cli(verbose: bool) -> None:
     setup_logging(verbose)
 
 
+def _apply_git_context(cfg: FrameworkConfig, git_repo: str | None, git_branch: str | None, git_commit: str | None) -> None:
+    """Apply CLI git context options to the config (mutates in place)."""
+    if git_repo or git_branch or git_commit:
+        if cfg.git_context is None:
+            cfg.git_context = GitContext()
+        if git_repo:
+            cfg.git_context.repo = git_repo
+        if git_branch:
+            cfg.git_context.branch = git_branch
+        if git_commit:
+            cfg.git_context.commit = git_commit
+
+
 @cli.command()
 @click.option("--config", "-c", default="qa-config.json", help="Config file path")
-def run(config: str) -> None:
+@click.option("--git-repo", default=None, help="Git repo URL or path for context")
+@click.option("--git-branch", default=None, help="Git branch name for context")
+@click.option("--git-commit", default=None, help="Git commit SHA for context")
+def run(config: str, git_repo: str | None, git_branch: str | None, git_commit: str | None) -> None:
     """Run the full QA pipeline: crawl → plan → execute → report."""
     try:
         cfg = FrameworkConfig.load(config)
@@ -47,6 +64,7 @@ def run(config: str) -> None:
         console.print("Run 'qa-framework init' to create a default config.")
         sys.exit(1)
 
+    _apply_git_context(cfg, git_repo, git_branch, git_commit)
     orchestrator = Orchestrator(cfg)
     results = orchestrator.run_full_pipeline()
 
@@ -81,9 +99,13 @@ def crawl(config: str) -> None:
 
 @cli.command()
 @click.option("--config", "-c", default="qa-config.json", help="Config file path")
-def plan(config: str) -> None:
+@click.option("--git-repo", default=None, help="Git repo URL or path for context")
+@click.option("--git-branch", default=None, help="Git branch name for context")
+@click.option("--git-commit", default=None, help="Git commit SHA for context")
+def plan(config: str, git_repo: str | None, git_branch: str | None, git_commit: str | None) -> None:
     """Generate a test plan from the existing site model."""
     cfg = FrameworkConfig.load(config)
+    _apply_git_context(cfg, git_repo, git_branch, git_commit)
     orchestrator = Orchestrator(cfg)
     try:
         test_plan = orchestrator.run_plan_only()

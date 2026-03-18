@@ -90,6 +90,7 @@ def build_planning_prompt(
     config_summary: str,
     hints: list[str],
     max_tests: int,
+    git_context_data: dict[str, str] | None = None,
 ) -> str:
     """Build the user message for the planning AI call."""
     parts = [
@@ -98,6 +99,40 @@ def build_planning_prompt(
         f"## Configuration\n\n{config_summary}\n",
         f"## Budget\n\nGenerate up to {max_tests} test cases.\n",
     ]
+
+    if git_context_data:
+        git_parts = ["## Git Context\n"]
+        repo = git_context_data.get("repo", "")
+        branch = git_context_data.get("branch", "")
+        commit = git_context_data.get("commit", "")
+        if repo:
+            git_parts.append(f"**Repository:** {repo}")
+        if branch or commit:
+            git_parts.append(f"**Branch:** {branch}  **Commit:** {commit}")
+
+        readme = git_context_data.get("readme", "")
+        if readme:
+            git_parts.append(f"\n### Application Overview\n\n{readme}\n")
+
+        structure = git_context_data.get("structure", "")
+        if structure:
+            git_parts.append(f"### Project Structure\n\n```\n{structure}\n```\n")
+
+        recent_log = git_context_data.get("recent_log", "")
+        if recent_log:
+            git_parts.append(f"### Recent Commits\n\n```\n{recent_log}\n```\n")
+
+        commit_diff = git_context_data.get("commit_diff", "")
+        if commit_diff:
+            git_parts.append(f"### Changes in Current Commit\n\n```\n{commit_diff}\n```\n")
+
+        git_parts.append(
+            "Use this context to deeply understand the application under test — its purpose, "
+            "architecture, tech stack, and what areas are actively being developed. Factor this "
+            "into your test planning: generate tests that reflect the application's real domain "
+            "and prioritize coverage of areas affected by recent changes.\n"
+        )
+        parts.append("\n".join(git_parts))
 
     if hints:
         hint_text = "\n".join(f"- {h}" for h in hints)

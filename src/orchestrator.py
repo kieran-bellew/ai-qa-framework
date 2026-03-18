@@ -10,6 +10,7 @@ from pathlib import Path
 
 from src.ai.client import AIClient, set_debug_dir
 from src.coverage.gap_analyzer import analyze_gaps
+from src.git_context import GitContextProvider
 from src.coverage.registry import CoverageRegistryManager
 from src.coverage.scorer import calculate_coverage_summary
 from src.coverage.visual_baseline_registry import VisualBaselineRegistryManager
@@ -47,8 +48,9 @@ class Orchestrator:
                 model=config.ai_model,
                 base_url=config.ai_base_url,
                 max_tokens=config.ai_max_planning_tokens,
+                aws_region=config.ai_aws_region,
             )
-        except EnvironmentError as e:
+        except Exception as e:
             logger.warning("AI client unavailable: %s. Running in fallback mode.", e)
 
         self.registry_manager = CoverageRegistryManager(
@@ -151,8 +153,21 @@ class Orchestrator:
             registry, site_model, self.config.staleness_threshold_days
         )
 
+        # Extract git context if configured
+        git_context_data: dict[str, str] | None = None
+        if self.config.git_context and self.config.git_context.repo:
+            logger.info("Extracting git context from %s ...", self.config.git_context.repo)
+            provider = GitContextProvider(
+                self.config.git_context,
+                max_context_chars=self.config.git_context_max_chars,
+            )
+            git_context_data = provider.extract()
+            logger.info("Git context extracted (%d chars readme, %d chars diff)",
+                        len(git_context_data.get("readme", "")),
+                        len(git_context_data.get("commit_diff", "")))
+
         planner = Planner(self.config, self.ai_client)
-        return planner.generate_plan(site_model, registry, gap_report)
+        return planner.generate_plan(site_model, registry, gap_report, git_context_data=git_context_data)
 
     def run_plan_only(self) -> TestPlan:
         """Run only the planning stage (requires existing site model)."""

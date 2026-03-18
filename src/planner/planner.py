@@ -38,6 +38,7 @@ class Planner:
         site_model: SiteModel,
         coverage_registry: CoverageRegistry | None = None,
         gap_report: CoverageGapReport | None = None,
+        git_context_data: dict[str, str] | None = None,
     ) -> TestPlan:
         """Generate a test plan from the site model and coverage data."""
         logger.info("Generating test plan for %s", site_model.base_url)
@@ -71,6 +72,7 @@ class Planner:
             config_summary=config_summary,
             hints=self.config.hints,
             max_tests=self.config.max_tests_per_run,
+            git_context_data=git_context_data,
         )
         logger.debug("Planning prompt built: %d chars", len(user_message))
 
