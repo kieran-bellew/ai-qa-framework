@@ -46,29 +46,28 @@ class AIClient:
 
     def __init__(
         self,
-        model: str = "claude-opus-4-6",
+        model: str = "us.anthropic.claude-opus-4-6-v1",
         max_tokens: int = 32000,
-        provider: str = "anthropic",
+        provider: str = "bedrock",
         base_url: str | None = None,
+        aws_region: str | None = None,
     ):
         self.provider = provider.strip().lower()
-        if self.provider not in {"anthropic", "ollama"}:
+        if self.provider not in {"bedrock", "ollama"}:
             raise ValueError(
                 f"Unsupported ai provider '{provider}'. "
-                "Supported providers: anthropic, ollama"
+                "Supported providers: bedrock, ollama"
             )
 
         self.client = None
         self.base_url = (base_url or os.environ.get("OLLAMA_BASE_URL") or "http://localhost:11434").rstrip("/")
-        if self.provider == "anthropic":
-            api_key = os.environ.get("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise EnvironmentError(
-                    "ANTHROPIC_API_KEY environment variable is not set. "
-                    "Please set it before running the framework."
-                )
+        if self.provider == "bedrock":
+            region = aws_region or os.environ.get("AWS_REGION") or "us-east-1"
             # Set a longer timeout for large planning requests (30 minutes)
-            self.client = anthropic.Anthropic(api_key=api_key, timeout=1800.0)
+            self.client = anthropic.AnthropicBedrock(
+                aws_region=region,
+                timeout=1800.0,
+            )
         self.model = model
         self.max_tokens = max_tokens
         self._call_count = 0
@@ -184,7 +183,7 @@ class AIClient:
 
         try:
             call_start = time.time()
-            if self.provider == "anthropic":
+            if self.provider == "bedrock":
                 response = self._call_with_retry(
                     lambda: self.client.messages.create(
                         model=self.model,
@@ -267,7 +266,7 @@ class AIClient:
 
         try:
             call_start = time.time()
-            if self.provider == "anthropic":
+            if self.provider == "bedrock":
                 response = self._call_with_retry(
                     lambda: self.client.messages.create(
                         model=self.model,

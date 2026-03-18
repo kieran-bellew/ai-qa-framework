@@ -9,6 +9,8 @@ from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
+from src.git_context import GitContext
+
 
 class ViewportConfig(BaseModel):
     width: int = 1280
@@ -74,9 +76,10 @@ class FrameworkConfig(BaseModel):
     selector_timeout_seconds: int = 10
 
     # AI settings
-    ai_provider: str = "anthropic"
-    ai_model: str = "claude-opus-4-6"
+    ai_provider: str = "bedrock"
+    ai_model: str = "us.anthropic.claude-opus-4-6-v1"
     ai_base_url: Optional[str] = None
+    ai_aws_region: Optional[str] = None
     ai_max_fallback_calls_per_test: int = 3
     ai_max_planning_tokens: int = 32000  # Increased to support large test plans
 
@@ -133,7 +136,7 @@ class FrameworkConfig(BaseModel):
         if not isinstance(v, str):
             raise ValueError(f"ai_provider must be str, got {type(v).__name__}")
         provider = v.strip().lower()
-        valid = {"anthropic", "ollama"}
+        valid = {"bedrock", "ollama"}
         if provider not in valid:
             raise ValueError(f"ai_provider must be one of {valid}, got '{v}'")
         return provider
@@ -144,6 +147,9 @@ class FrameworkConfig(BaseModel):
 
     # Hints
     hints: list[str] = Field(default_factory=list)
+
+    # Git context (optional)
+    git_context: Optional[GitContext] = None
 
     def model_post_init(self, __context) -> None:
         if not self.crawl.target_url:

@@ -265,7 +265,7 @@ class TestEndToEndScenarios:
         assert run_result.total_tests == len(plan.test_cases)
         assert run_result.target_url == config.target_url
 
-    @patch("anthropic.Anthropic")
+    @patch("anthropic.AnthropicBedrock")
     def test_ai_client_integration(self, mock_anthropic_class):
         """Test AI client integration with prompts."""
         from src.ai.client import AIClient
@@ -282,25 +282,23 @@ class TestEndToEndScenarios:
         mock_client.messages.create.return_value = mock_response
         mock_anthropic_class.return_value = mock_client
 
-        # Create AI client
-        with patch.dict("os.environ", {"ANTHROPIC_API_KEY": "test-key"}):
-            client = AIClient()
+        client = AIClient()
 
-            # Build prompt
-            run_result_json = json.dumps({
-                "total_tests": 5,
-                "passed": 4,
-                "failed": 1,
-            })
-            coverage_summary = "5 tests executed across functional tests."
-            prompt = build_summary_prompt(run_result_json, coverage_summary)
+        # Build prompt
+        run_result_json = json.dumps({
+            "total_tests": 5,
+            "passed": 4,
+            "failed": 1,
+        })
+        coverage_summary = "5 tests executed across functional tests."
+        prompt = build_summary_prompt(run_result_json, coverage_summary)
 
-            # Get summary
-            with patch.object(client, '_save_exchange_log'):
-                summary = client.complete(
-                    system_prompt="You are a QA assistant.",
-                    user_message=prompt,
-                )
+        # Get summary
+        with patch.object(client, '_save_exchange_log'):
+            summary = client.complete(
+                system_prompt="You are a QA assistant.",
+                user_message=prompt,
+            )
 
             assert summary == "Test run completed successfully."
             assert client.call_count == 1

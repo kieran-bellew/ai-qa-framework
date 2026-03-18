@@ -1,0 +1,59 @@
+[project]
+name = "ai-qa-framework"
+version = "0.1.0"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.40.0",
+    "anthropic[bedrock]>=0.39.0",
+    "pydantic>=2.5.0",
+    "click>=8.1.0",
+    "jinja2>=3.1.0",
+    "Pillow>=10.0.0",
+    "aiofiles>=23.0.0",
+    "rich>=13.0.0",
+]
+
+[project.scripts]
+qa-framework = "src.cli:cli"
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.8.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+filterwarnings = [
+    "error",
+    "ignore::DeprecationWarning",
+    "ignore::PendingDeprecationWarning",
+    "ignore::pytest.PytestCollectionWarning",
+]
+addopts = "-v --strict-markers --tb=short"
+markers = [
+    "unit: Unit tests for individual functions/classes",
+    "integration: Integration tests that test multiple components together",
+    "e2e: End-to-end tests that test the full workflow",
+    "slow: Tests that take a long time to run",
+    "requires_api: Tests that require API credentials",
+    "requires_browser: Tests that require browser automation",
+]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
