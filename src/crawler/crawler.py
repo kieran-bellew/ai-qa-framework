@@ -147,6 +147,7 @@ class Crawler:
 
             auth_flow = None
             post_login_url = None
+            auth_page = None
             if self.config.auth:
                 logger.info("Authenticating before crawl...")
                 result = await perform_smart_auth(
@@ -155,11 +156,62 @@ class Crawler:
                 if result.success:
                     auth_flow = result.auth_flow
                     post_login_url = result.post_login_url
+                    auth_page = result.authenticated_page
+                    # Capture auth storage (localStorage/sessionStorage) so it
+                    # survives page.goto() which re-bootstraps SPAs.
+                    if auth_page:
+                        self._auth_storage = await self._capture_web_storage(auth_page)
+                        if self._auth_storage:
+                            logger.info(
+                                "Captured auth storage: %d localStorage, %d sessionStorage keys",
+                                len(self._auth_storage.get("localStorage", [])),
+                                len(self._auth_storage.get("sessionStorage", [])),
+                            )
+                    # Run post-auth actions (e.g., select app context)
+                    if auth_page and self.config.auth.post_auth_actions:
+                        from src.utils.post_auth import run_post_auth_actions
+
+                        await run_post_auth_actions(
+                            auth_page, self.config.auth.post_auth_actions,
+                        )
+                        post_login_url = auth_page.url
+                        # Re-capture storage after post-auth navigation
+                        self._auth_storage = await self._capture_web_storage(auth_page)
+
                     logger.info("Authentication successful")
                 else:
                     logger.error("Authentication failed: %s", result.error)
 
-            await self._priority_crawl(context, target, post_login_url=post_login_url)
+            await self._priority_crawl(
+                context, target,
+                post_login_url=post_login_url,
+                auth_page=auth_page,
+            )
+
+            # Interaction crawl: discover UI states by clicking elements
+            if self.crawl_config.interaction.enabled:
+                from .interaction_crawler import InteractionCrawler
+
+                ic = InteractionCrawler(
+                    self.config, self.output_dir, self._ai_client,
+                    auth_storage=getattr(self, "_auth_storage", None),
+                )
+                crawl_page = getattr(self, "_crawl_page", None)
+                new_states, state_graph = await ic.explore_states(
+                    context, self._pages, existing_page=crawl_page,
+                )
+                self._pages.extend(new_states)
+                self._state_graph = state_graph
+                logger.info(
+                    "Interaction crawl: %d new states, %d transitions",
+                    len(new_states),
+                    sum(len(v) for v in state_graph.values()),
+                )
+
+            # Close the crawl page now that interaction crawl is done
+            crawl_page = getattr(self, "_crawl_page", None)
+            if crawl_page:
+                await crawl_page.close()
 
             # Probe auth requirements for each discovered page
             if self.config.auth and auth_flow:
@@ -188,6 +240,7 @@ class Crawler:
                 "pages_found": len(self._pages),
                 "is_spa": self._is_spa,
             },
+            state_graph=getattr(self, "_state_graph", {}),
         )
 
     async def _probe_auth_requirements(self, browser) -> None:
@@ -252,6 +305,7 @@ class Crawler:
     async def _priority_crawl(
         self, context: BrowserContext, start_url: str,
         post_login_url: str | None = None,
+        auth_page: Page | None = None,
     ) -> None:
         """Priority-based crawl: organic links first, sitemap as backfill."""
         heap: list[_CrawlEntry] = []
@@ -264,14 +318,81 @@ class Crawler:
             logger.info("Seeding post-login URL into crawl queue: %s", post_login_url)
             self._enqueue(heap, post_login_url, depth=0, priority=PRIORITY_START)
 
-        # Open a single page we'll reuse for the entire crawl
-        page = await context.new_page()
+        # Reuse the authenticated page if available — SPAs that store auth
+        # tokens in JS memory (not cookies) lose the session on new pages.
+        page = auth_page or await context.new_page()
         network_requests: list[NetworkRequest] = []
         self._attach_network_listener(page, network_requests)
 
         # Track whether we've loaded the sitemap yet (defer until after first page)
         sitemap_loaded = False
 
+        # For SPA auth: process the auth page as the first "crawled" page
+        # without navigating, since page.goto() re-bootstraps the SPA and
+        # kills in-memory auth tokens.
+        first_page_from_auth = auth_page is not None
+
+        # Semaphore for parallel page processing (after the first page)
+        max_parallel = min(3, self.crawl_config.max_pages)
+        crawl_semaphore = asyncio.Semaphore(max_parallel)
+        pending_tasks: set[asyncio.Task] = set()
+
+        async def _crawl_one_page(crawl_page: Page, url: str, depth: int, is_first: bool) -> None:
+            """Process a single page: navigate, extract, discover links."""
+            nr: list[NetworkRequest] = []
+            self._attach_network_listener(crawl_page, nr)
+
+            try:
+                if is_first and first_page_from_auth:
+                    actual_url = crawl_page.url
+                    logger.info(
+                        "Using authenticated page as-is (at %s) instead of navigating to %s",
+                        actual_url, url,
+                    )
+                    url = actual_url
+                else:
+                    await human_delay(crawl_page, min_ms=200, max_ms=800)
+                    loaded = await self._navigate_with_retry(crawl_page, url)
+                    if not loaded:
+                        logger.warning("Failed to load: %s", url)
+                        return
+
+                if is_first:
+                    spa_type = await detect_spa_type(crawl_page)
+                    self._is_spa = spa_type != "traditional"
+                    if self._is_spa:
+                        logger.info("SPA detected (routing: %s)", spa_type)
+
+                page_model = await self._process_page(crawl_page, url, nr)
+                self._pages.append(page_model)
+
+                discovered = await self._discover_all_links(crawl_page, url)
+
+                pid = page_model.page_id
+                self._nav_graph[pid] = []
+                organic_count = 0
+                for link_url in discovered:
+                    if not _is_valid_page_url(link_url):
+                        continue
+                    if not _is_same_origin(self.crawl_config.target_url, link_url):
+                        continue
+                    link_id = _page_id(link_url)
+                    self._nav_graph[pid].append(link_id)
+                    if self._enqueue(heap, link_url, depth + 1, PRIORITY_ORGANIC):
+                        organic_count += 1
+
+                logger.info(
+                    "Page '%s' — %d links found, %d new queued",
+                    page_model.title or url, len(discovered), organic_count,
+                )
+            except Exception as e:
+                logger.error("Error crawling %s: %s", url, e)
+            finally:
+                # Close worker pages (not the auth page)
+                if crawl_page != page:
+                    await crawl_page.close()
+
+        is_first_page = True
         while heap and len(self._visited_urls) < self.crawl_config.max_pages:
             entry = heapq.heappop(heap)
             url = entry.url
@@ -292,59 +413,31 @@ class Crawler:
                 depth, entry.priority, url,
             )
 
-            network_requests.clear()
+            if is_first_page:
+                # First page: always sequential (detect SPA type, use auth page if available)
+                await _crawl_one_page(page, url, depth, is_first=True)
+                is_first_page = False
 
-            # Human-like pause between page navigations
-            if len(self._visited_urls) > 1:
-                await human_delay(page, min_ms=300, max_ms=1200)
+                # Load sitemap after first page
+                if not sitemap_loaded:
+                    sitemap_loaded = True
+                    sitemap_count = await self._load_sitemap_backfill(
+                        context, start_url, heap
+                    )
+                    if sitemap_count:
+                        logger.info("Sitemap backfill: %d URLs queued", sitemap_count)
+            else:
+                # Subsequent pages: process in parallel with new pages
+                async def _worker(u, d):
+                    async with crawl_semaphore:
+                        worker_page = await context.new_page()
+                        await _crawl_one_page(worker_page, u, d, is_first=False)
 
-            try:
-                loaded = await self._navigate_with_retry(page, url)
-                if not loaded:
-                    logger.warning("Failed to load: %s", url)
-                    continue
+                task = asyncio.create_task(_worker(url, depth))
+                pending_tasks.add(task)
+                task.add_done_callback(pending_tasks.discard)
 
-                # Detect SPA on first page
-                if len(self._visited_urls) == 1:
-                    spa_type = await detect_spa_type(page)
-                    self._is_spa = spa_type != "traditional"
-                    if self._is_spa:
-                        logger.info("SPA detected (routing: %s)", spa_type)
-
-                # Process page content
-                logger.debug("Extracting page content: elements, forms, screenshots...")
-                page_model = await self._process_page(page, url, network_requests)
-                self._pages.append(page_model)
-                logger.debug("Page processed: %d elements, %d forms, %d network requests",
-                             len(page_model.elements), len(page_model.forms),
-                             len(page_model.network_requests))
-
-                # === LINK DISCOVERY ===
-                logger.debug("Discovering links on page...")
-                discovered = await self._discover_all_links(page, url)
-
-                # Build nav graph and queue discovered links at ORGANIC priority
-                pid = page_model.page_id
-                self._nav_graph[pid] = []
-                organic_count = 0
-                for link_url in discovered:
-                    if not _is_valid_page_url(link_url):
-                        continue
-                    if not _is_same_origin(self.crawl_config.target_url, link_url):
-                        continue
-
-                    link_id = _page_id(link_url)
-                    self._nav_graph[pid].append(link_id)
-
-                    if self._enqueue(heap, link_url, depth + 1, PRIORITY_ORGANIC):
-                        organic_count += 1
-
-                logger.info(
-                    "Page '%s' — %d links found, %d new queued",
-                    page_model.title or url, len(discovered), organic_count,
-                )
-
-                # After the first page is processed, load sitemap as backfill
+                # Load sitemap after first navigation
                 if not sitemap_loaded:
                     sitemap_loaded = True
                     sitemap_count = await self._load_sitemap_backfill(
@@ -353,10 +446,19 @@ class Crawler:
                     if sitemap_count:
                         logger.info("Sitemap backfill: %d URLs queued", sitemap_count)
 
-            except Exception as e:
-                logger.error("Error crawling %s: %s", url, e)
+                # If we've filled the semaphore, wait for at least one to finish
+                # so new links are discovered before we exhaust the heap
+                if len(pending_tasks) >= max_parallel:
+                    done, _ = await asyncio.wait(pending_tasks, return_when=asyncio.FIRST_COMPLETED)
+                    for t in done:
+                        pending_tasks.discard(t)
 
-        await page.close()
+        # Wait for all pending crawl tasks to complete
+        if pending_tasks:
+            await asyncio.gather(*pending_tasks, return_exceptions=True)
+
+        # Keep the page alive for the interaction crawler (SPA auth state)
+        self._crawl_page = page
 
         logger.info(
             "Crawl finished: %d pages visited, %d total URLs seen",
@@ -708,13 +810,22 @@ class Crawler:
     # ------------------------------------------------------------------
 
     async def _navigate_with_retry(self, page: Page, url: str, retries: int = 2) -> bool:
-        """Navigate to a URL with retry on failure."""
+        """Navigate to a URL with retry on failure.
+
+        If auth storage was captured, restores it after navigation so SPAs
+        that store tokens in localStorage/sessionStorage stay authenticated.
+        """
         for attempt in range(retries + 1):
             try:
                 logger.debug("Navigating to %s (attempt %d/%d)...", url, attempt + 1, retries + 1)
                 resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
                 if resp and resp.status >= 400 and resp.status != 404:
                     logger.warning("HTTP %d for %s", resp.status, url)
+
+                # Restore auth storage after navigation (SPA tokens)
+                auth_storage = getattr(self, "_auth_storage", None)
+                if auth_storage:
+                    await self._restore_web_storage(page, auth_storage)
 
                 if self.crawl_config.wait_for_idle:
                     logger.debug("Waiting for network idle...")
@@ -819,3 +930,41 @@ class Crawler:
             }""")
         except Exception:
             return "static"
+
+    @staticmethod
+    async def _capture_web_storage(page: Page) -> dict | None:
+        """Capture localStorage and sessionStorage from the page.
+
+        SPAs (especially Angular) often store auth tokens in web storage.
+        Capturing them lets us restore the session after page.goto() which
+        re-bootstraps the SPA and loses in-memory state.
+        """
+        try:
+            return await page.evaluate("""() => ({
+                localStorage: Object.keys(localStorage).map(k => [k, localStorage.getItem(k)]),
+                sessionStorage: Object.keys(sessionStorage).map(k => [k, sessionStorage.getItem(k)]),
+            })""")
+        except Exception as e:
+            logger.debug("Failed to capture web storage: %s", e)
+            return None
+
+    @staticmethod
+    async def _restore_web_storage(page: Page, storage: dict) -> None:
+        """Restore localStorage and sessionStorage, then reload so the SPA picks up the tokens."""
+        try:
+            await page.evaluate("""(storage) => {
+                for (const [k, v] of storage.localStorage) {
+                    localStorage.setItem(k, v);
+                }
+                for (const [k, v] of storage.sessionStorage) {
+                    sessionStorage.setItem(k, v);
+                }
+            }""", storage)
+            # Reload so the SPA reads the restored tokens on bootstrap
+            await page.reload(wait_until="domcontentloaded", timeout=15000)
+            try:
+                await page.wait_for_load_state("networkidle", timeout=10000)
+            except Exception:
+                await page.wait_for_timeout(2000)
+        except Exception as e:
+            logger.debug("Failed to restore web storage: %s", e)

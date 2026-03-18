@@ -11,6 +11,7 @@ from src.models.coverage import (
     CategoryCoverage,
     CoverageRegistry,
     GlobalCoverageStats,
+    JourneyCoverage,
     PageCoverage,
     SignatureRecord,
     TestResultSummary,
@@ -125,6 +126,21 @@ class CoverageRegistryManager:
                     test_count=1,
                     history=[summary],
                 ))
+
+        # Track journey coverage
+        for test_result in run_result.test_results:
+            sig = test_result.coverage_signature or ""
+            if sig.startswith("journey:"):
+                journey_id = sig
+                if journey_id not in registry.journeys:
+                    registry.journeys[journey_id] = JourneyCoverage(
+                        journey_id=journey_id,
+                        states_traversed=sig.replace("journey:", "").split("->"),
+                    )
+                jc = registry.journeys[journey_id]
+                jc.last_tested = now
+                jc.last_result = test_result.result
+                jc.test_count += 1
 
         # Recalculate global stats
         self._recalculate_stats(registry)

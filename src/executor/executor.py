@@ -29,6 +29,7 @@ from .action_runner import resolve_dynamic_vars_for_test_case, run_action
 from .assertion_checker import check_assertion
 from .evidence_collector import EvidenceCollector
 from .fallback import FallbackHandler
+from .selector_cache import SelectorCache
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,13 @@ class Executor:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.visual_registry = visual_registry
         self.visual_registry_manager = visual_registry_manager
+
+        # Load persistent selector cache
+        cache_path = runs_dir.parent / "selector_cache.json"
+        self._selector_cache_path = cache_path
+        self._selector_cache = SelectorCache.load(cache_path, target_url=config.target_url)
+        self._selector_cache.decay()  # Age existing mappings
+        logger.debug("Loaded selector cache: %d mappings", len(self._selector_cache.mappings))
 
     async def execute(self, plan: TestPlan, baseline_dir: Path | None = None) -> RunResult:
         """Execute a full test plan and return results.
@@ -231,6 +239,9 @@ class Executor:
             test_results=test_results,
         )
 
+        # Persist selector cache
+        self._selector_cache.save(self._selector_cache_path)
+
         logger.info(
             "Execution complete: %d passed, %d failed, %d skipped, %d errors (%.1fs)",
             run_result.passed, run_result.failed, run_result.skipped,
@@ -296,6 +307,30 @@ class Executor:
         collector.setup_listeners(page)
 
         try:
+            # === POST-AUTH ACTIONS ===
+            # Navigate through multi-step entry flows (context selectors, etc.)
+            # so the test starts inside the actual app, not on a gateway page.
+            if tc.requires_auth and self.config.auth and self.config.auth.post_auth_actions:
+                from src.utils.post_auth import run_post_auth_actions
+
+                # Navigate to the app's base URL first so the SPA loads
+                try:
+                    await page.goto(
+                        self.config.target_url,
+                        wait_until="domcontentloaded",
+                        timeout=15000,
+                    )
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=10000)
+                    except Exception:
+                        await page.wait_for_timeout(2000)
+                except Exception as e:
+                    logger.debug("Post-auth navigation failed: %s", e)
+
+                await run_post_auth_actions(
+                    page, self.config.auth.post_auth_actions,
+                )
+
             # === PRECONDITIONS ===
             if tc.preconditions:
                 logger.debug("  Running %d preconditions...", len(tc.preconditions))
@@ -305,7 +340,7 @@ class Executor:
                              action.description or action.selector or "")
                 step_screenshot = None
                 try:
-                    await run_action(page, action, timeout=selector_timeout_ms)
+                    await run_action(page, action, timeout=selector_timeout_ms, selector_cache=self._selector_cache)
                     step_screenshot = await collector.take_screenshot(page, f"precond_{i}")
                     if step_screenshot:
                         screenshots.append(step_screenshot)
@@ -346,7 +381,7 @@ class Executor:
                              action.description or action.selector or "")
                 step_screenshot = None
                 try:
-                    await run_action(page, action, timeout=selector_timeout_ms)
+                    await run_action(page, action, timeout=selector_timeout_ms, selector_cache=self._selector_cache)
                     # Skip step screenshots for visual tests — viewport shots are
                     # captured by the assertion checker and are more useful.
                     if not is_visual:
@@ -400,6 +435,11 @@ class Executor:
                                     status="pass", screenshot_path=retry_screenshot,
                                 ))
                                 recovered = True
+                                # Cache the successful replacement
+                                self._selector_cache.record_success(
+                                    action.selector or "", fb_response.new_selector,
+                                    page_url=page.url, action_type=action.action_type,
+                                )
                             except Exception:
                                 pass
                         elif fb_response.decision == "adapt" and fb_response.new_action:

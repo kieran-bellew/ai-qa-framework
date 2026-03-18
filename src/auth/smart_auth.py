@@ -29,11 +29,15 @@ class SmartAuthResult:
         auth_flow: Optional[AuthFlow] = None,
         error: Optional[str] = None,
         post_login_url: Optional[str] = None,
+        authenticated_page: Optional[Page] = None,
     ):
         self.success = success
         self.auth_flow = auth_flow
         self.error = error
         self.post_login_url = post_login_url
+        # The page used for login — kept alive so SPAs that store auth
+        # tokens in JS memory (not cookies) preserve their session.
+        self.authenticated_page = authenticated_page
 
 
 async def perform_smart_auth(
@@ -65,14 +69,27 @@ async def perform_smart_auth(
         logger.debug("Smart auth: selectors resolved — username=%s, password=%s, submit=%s",
                       username_sel, password_sel, submit_sel)
 
-        # Fill and submit
+        # Fill using native value setter + event dispatch for SPA compatibility.
+        # page.fill() may not trigger Angular/React change detection.
         logger.info("Smart auth: filling form (method=%s)", method)
-        await page.fill(username_sel, auth_config.username)
-        await page.fill(password_sel, auth_config.password)
-        await page.click(submit_sel)
+        await _type_into_field(page, username_sel, auth_config.username)
+        await _type_into_field(page, password_sel, auth_config.password)
+
+        # Submit: try clicking the button, then always press Enter as backup.
+        # Generic button selectors may hit the wrong element (e.g. a password
+        # visibility toggle instead of the actual submit button).
+        try:
+            await page.click(submit_sel, timeout=5000)
+        except Exception as click_err:
+            logger.debug("Smart auth: submit click failed (%s)", click_err)
+        try:
+            await page.press(password_sel, "Enter")
+        except Exception:
+            pass
 
         # Verify success
         success = await _verify_login_success(page, auth_config)
+
         if success:
             # After login verification, wait for any JS-triggered redirect.
             # Login pages often redirect via JS (e.g., window.location = '/dashboard')
@@ -97,6 +114,7 @@ async def perform_smart_auth(
             return SmartAuthResult(
                 success=True,
                 post_login_url=post_login_url,
+                authenticated_page=page,
                 auth_flow=AuthFlow(
                     login_url=auth_config.login_url,
                     login_method="form",
@@ -118,9 +136,9 @@ async def perform_smart_auth(
 
     except Exception as e:
         logger.error("Smart auth failed: %s", e)
-        return SmartAuthResult(success=False, error=str(e))
-    finally:
+        # Close the page on failure — caller won't need it
         await page.close()
+        return SmartAuthResult(success=False, error=str(e))
 
 
 async def _resolve_selectors(
@@ -175,6 +193,35 @@ async def _resolve_selectors(
     return None
 
 
+async def _type_into_field(page: Page, selector: str, value: str) -> None:
+    """Set a form field value with proper event dispatch for SPA frameworks.
+
+    Angular/React reactive forms override the native value setter. Using
+    page.fill() or page.type() may not trigger their change detection.
+    This function uses the native HTMLInputElement.value setter and
+    dispatches input/change events to ensure the framework picks up the value.
+    """
+    await page.evaluate("""({selector, value}) => {
+        const el = document.querySelector(selector);
+        if (!el) throw new Error('Element not found: ' + selector);
+
+        // Focus the element
+        el.focus();
+        el.click();
+
+        // Use the native value setter (bypasses Angular/React overrides)
+        const nativeSetter = Object.getOwnPropertyDescriptor(
+            window.HTMLInputElement.prototype, 'value'
+        ).set;
+        nativeSetter.call(el, value);
+
+        // Dispatch events that Angular/React listen for
+        el.dispatchEvent(new Event('input', { bubbles: true }));
+        el.dispatchEvent(new Event('change', { bubbles: true }));
+        el.dispatchEvent(new Event('blur', { bubbles: true }));
+    }""", {"selector": selector, "value": value})
+
+
 # ---------------------------------------------------------------------------
 # Tier 2: Auto-detection via form_analyzer + heuristics
 # ---------------------------------------------------------------------------
@@ -221,7 +268,13 @@ async def _auto_detect_login_form(
 
     submit_sel = best_form.submit_selector
     if not submit_sel:
-        submit_sel = "button[type='submit'], button"
+        # Prefer submit buttons, then buttons with login-related text/id
+        submit_sel = (
+            "button[type='submit'], "
+            "input[type='submit'], "
+            "button[id*='login'], button[id*='submit'], button[id*='signin'], "
+            "button:has-text('Login'), button:has-text('Sign in'), button:has-text('Log in')"
+        )
 
     return (username_sel, password_sel, submit_sel)
 
@@ -468,38 +521,74 @@ async def _verify_login_success(page: Page, auth_config: AuthConfig) -> bool:
             # Fall through to other checks
             pass
 
-    try:
-        await page.wait_for_load_state("networkidle", timeout=10000)
-    except Exception:
-        pass
+    # Wait for the login to fully settle: either URL changes (success)
+    # or the password field reappears (failure). Poll for up to 15 seconds.
+    login_path = auth_config.login_url.rstrip("/")
+    for _ in range(15):
+        await page.wait_for_timeout(1000)
 
-    # Check 1: URL changed away from login page
-    current_url = page.url
-    logger.debug("Smart auth: checking URL change — current=%s, login=%s",
-                  current_url, auth_config.login_url)
-    if current_url != auth_config.login_url:
-        login_path = auth_config.login_url.rstrip("/")
+        # Success: URL changed away from login
+        current_url = page.url
         current_path = current_url.rstrip("/")
         if current_path != login_path:
+            logger.info("Smart auth: URL changed to %s — login succeeded", current_url)
             return True
 
-    # Check 2: Login form is no longer present (password field gone)
-    try:
-        has_password = await page.evaluate("""() => {
-            const pw = document.querySelector('input[type="password"]');
-            if (!pw) return false;
-            const rect = pw.getBoundingClientRect();
-            return rect.width > 0 && rect.height > 0;
-        }""")
-        if not has_password:
-            return True
-    except Exception:
-        pass
+        # Failure: password field visible (form reappeared after API error)
+        try:
+            has_password = await page.evaluate("""() => {
+                const pw = document.querySelector('input[type="password"]');
+                if (!pw) return false;
+                const rect = pw.getBoundingClientRect();
+                return rect.width > 0 && rect.height > 0;
+            }""")
+        except Exception:
+            has_password = False
+
+        # Also check for error messages on the page
+        try:
+            has_error = await page.evaluate("""() => {
+                const selectors = [
+                    '.error', '.alert-danger', '.mat-error', '.mat-mdc-form-field-error',
+                    '[role="alert"]', '.login-error', '.snack-bar-container',
+                    'mat-snack-bar-container', '.mat-snack-bar-container',
+                    '.cdk-overlay-pane .mat-mdc-snack-bar-container',
+                ];
+                for (const sel of selectors) {
+                    const el = document.querySelector(sel);
+                    if (el && el.textContent.trim()) return el.textContent.trim().substring(0, 200);
+                }
+                return '';
+            }""")
+        except Exception:
+            has_error = ""
+
+        if has_error:
+            logger.warning("Smart auth: error on page: %s", has_error)
+            return False
+
+        if has_password:
+            # Password field visible and no URL change — still on login
+            # Keep polling; the form might be visible during submission
+            continue
+
+        # Password field gone, URL same — could be mid-transition
+        # Keep polling to see if URL changes
+        continue
+
+    # Timed out waiting — check final state
+    final_url = page.url
+    if final_url.rstrip("/") != login_path:
+        return True
 
     # If success_indicator was set and we got here, login likely failed
     if auth_config.success_indicator:
         return False
 
-    # If we get here with no success_indicator, assume success
-    # (the page loaded without error after submit)
-    return True
+    # Password field still visible + URL unchanged = login likely failed
+    logger.warning(
+        "Smart auth: login form still visible after submit (URL=%s). "
+        "Login may have failed — check credentials or add a success_indicator.",
+        current_url,
+    )
+    return False

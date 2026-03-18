@@ -44,6 +44,7 @@ class GitContextProvider:
         self.git_context = git_context
         self.max_context_chars = max_context_chars
         self._work_dir: Path | None = None
+        self._ref: str = "HEAD"  # The git ref to use for log/diff/show commands
 
     def extract(self) -> dict[str, str]:
         """Clone the repo (if needed), checkout the commit, and extract context.
@@ -67,7 +68,7 @@ class GitContextProvider:
         try:
             self._work_dir = Path(tempfile.mkdtemp(prefix="qa-git-"))
             self._clone()
-            self._checkout()
+            self._resolve_ref()
 
             result = self._extract_within_budget(result)
         except Exception as e:
@@ -143,33 +144,82 @@ class GitContextProvider:
             raise RuntimeError(f"git {args[0]} failed: {proc.stderr.strip()}")
         return proc.stdout
 
+    @staticmethod
+    def _strip_remote_prefix(branch: str) -> str:
+        """Strip remote prefix (e.g. 'origin/release/x' → 'release/x')."""
+        for prefix in ("origin/", "upstream/"):
+            if branch.startswith(prefix):
+                return branch[len(prefix):]
+        return branch
+
+    def _is_local_repo(self) -> bool:
+        repo = self.git_context.repo or ""
+        return bool(repo) and not repo.startswith(("http://", "https://", "git://", "ssh://", "git@"))
+
     def _clone(self) -> None:
-        """Shallow-clone the repo."""
+        """Shallow-clone the repo, or point to local repo directly."""
+        if self._is_local_repo():
+            # For local repos, read directly — never modify their working tree.
+            self._work_dir = Path(self.git_context.repo).resolve()
+            return
+
         args = ["clone", "--depth", "50"]
         if self.git_context.branch:
-            args += ["--branch", self.git_context.branch]
+            args += ["--branch", self._strip_remote_prefix(self.git_context.branch)]
         args += [self.git_context.repo, str(self._work_dir / "repo")]
         self._run_git(*args, cwd=self._work_dir)
         self._work_dir = self._work_dir / "repo"
 
-    def _checkout(self) -> None:
-        """Checkout specific commit if provided."""
+    def _resolve_ref(self) -> None:
+        """Resolve the target git ref for reading context.
+
+        For cloned repos, checkout has already been done so HEAD is correct.
+        For local repos, resolve the branch/commit to a ref we can use
+        directly in git log/diff/show commands without checking out.
+        """
         if self.git_context.commit:
-            self._run_git("checkout", self.git_context.commit)
+            if self._is_local_repo():
+                self._ref = self.git_context.commit
+            else:
+                self._run_git("checkout", self.git_context.commit)
+        elif self.git_context.branch and self._is_local_repo():
+            # Try the branch as given (e.g. 'origin/release/2.9.1-branch'),
+            # then stripped, then with origin/ prefix.
+            branch = self.git_context.branch
+            for candidate in [branch, self._strip_remote_prefix(branch), f"origin/{self._strip_remote_prefix(branch)}"]:
+                try:
+                    # Verify the ref exists
+                    self._run_git("rev-parse", "--verify", candidate)
+                    self._ref = candidate
+                    return
+                except RuntimeError:
+                    continue
+            logger.warning("Could not resolve ref for branch: %s", branch)
 
     # ------------------------------------------------------------------
     # Context extraction methods
     # ------------------------------------------------------------------
 
     def _read_readme(self, max_chars: int) -> str:
-        """Read README.md (or similar) from the repo root."""
+        """Read README.md (or similar) from the repo."""
+        if self._is_local_repo():
+            # Use git show to read from the target ref without checkout
+            for name in ("README.md", "README.rst", "README.txt", "README"):
+                try:
+                    text = self._run_git("show", f"{self._ref}:{name}")
+                    if len(text) > max_chars:
+                        text = text[:max_chars].rsplit("\n", 1)[0] + "\n[...truncated]"
+                    return text
+                except RuntimeError:
+                    continue
+            return ""
+
         for name in ("README.md", "README.rst", "README.txt", "README"):
             readme_path = self._work_dir / name
             if readme_path.exists():
                 try:
                     text = readme_path.read_text(encoding="utf-8", errors="replace")
                     if len(text) > max_chars:
-                        # Truncate at last complete line within budget
                         text = text[:max_chars].rsplit("\n", 1)[0] + "\n[...truncated]"
                     return text
                 except Exception:
@@ -179,7 +229,7 @@ class GitContextProvider:
     def _get_recent_log(self, max_chars: int) -> str:
         """Get recent git log (one-line format)."""
         try:
-            log = self._run_git("log", "--oneline", "-20", "--no-decorate").strip()
+            log = self._run_git("log", "--oneline", "-20", "--no-decorate", self._ref).strip()
             return log[:max_chars]
         except Exception:
             return ""
@@ -187,7 +237,7 @@ class GitContextProvider:
     def _get_diff_stat(self, max_chars: int) -> str:
         """Get --stat summary for the current commit."""
         try:
-            stat = self._run_git("diff", "HEAD~1..HEAD", "--stat").strip()
+            stat = self._run_git("diff", f"{self._ref}~1..{self._ref}", "--stat").strip()
             return stat[:max_chars]
         except Exception:
             return ""
@@ -195,7 +245,7 @@ class GitContextProvider:
     def _get_changed_files_tree(self) -> str:
         """Get list of files changed in the current commit — always compact."""
         try:
-            files = self._run_git("diff", "HEAD~1..HEAD", "--name-only").strip()
+            files = self._run_git("diff", f"{self._ref}~1..{self._ref}", "--name-only").strip()
             if not files:
                 return ""
             lines = files.split("\n")
@@ -207,7 +257,7 @@ class GitContextProvider:
     def _get_full_diff(self, max_chars: int) -> str:
         """Get the full patch diff, truncated to budget."""
         try:
-            diff = self._run_git("diff", "HEAD~1..HEAD")
+            diff = self._run_git("diff", f"{self._ref}~1..{self._ref}")
             if len(diff) > max_chars:
                 diff = diff[:max_chars].rsplit("\n", 1)[0] + "\n[...diff truncated]"
             return diff
@@ -215,7 +265,20 @@ class GitContextProvider:
             return ""
 
     def _get_repo_tree(self, max_chars: int) -> str:
-        """Get a tree-like directory listing of the repo, capped by char budget."""
+        """Get a tree-like listing of the repo at the target ref."""
+        try:
+            tree = self._run_git("ls-tree", "-r", "--name-only", self._ref)
+            if len(tree) > max_chars:
+                tree = tree[:max_chars].rsplit("\n", 1)[0] + "\n[...truncated]"
+            return tree
+        except Exception:
+            # Fallback to directory walk for cloned repos
+            if not self._is_local_repo():
+                return self._walk_repo_tree(max_chars)
+            return ""
+
+    def _walk_repo_tree(self, max_chars: int) -> str:
+        """Fallback: walk the filesystem for directory listing."""
         lines: list[str] = []
         skip = {".git", "node_modules", "__pycache__", ".venv", "venv", ".tox", "dist", "build", ".mypy_cache"}
         self._walk_tree(self._work_dir, "", 0, lines, skip, max_depth=3)
@@ -245,8 +308,11 @@ class GitContextProvider:
     # ------------------------------------------------------------------
 
     def _cleanup(self) -> None:
-        """Remove the temporary clone directory."""
+        """Remove the temporary clone directory (skip for local repos)."""
         if self._work_dir is None:
+            return
+        # Never delete the user's actual repo
+        if self._is_local_repo():
             return
         cleanup_dir = self._work_dir
         if cleanup_dir.name == "repo" and cleanup_dir.parent.name.startswith("qa-git-"):

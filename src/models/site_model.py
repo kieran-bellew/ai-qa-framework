@@ -25,6 +25,9 @@ class FormField(BaseModel):
     validation_pattern: Optional[str] = None
     options: Optional[list[str]] = None
     selector: str = ""
+    interaction_pattern: str = "standard"  # standard | mat_select | mat_autocomplete | mat_datepicker | mat_checkbox | mat_slide_toggle
+    interaction_steps: list[dict] = Field(default_factory=list)  # [{action_type, selector, description}]
+    validation_rules: list[dict] = Field(default_factory=list)  # [{rule, value, error_message}]
 
 
 class FormModel(BaseModel):
@@ -33,6 +36,8 @@ class FormModel(BaseModel):
     method: str = "GET"
     fields: list[FormField] = Field(default_factory=list)
     submit_selector: str = ""
+    form_pattern: str = "standard"  # standard | wizard | dialog | inline_edit
+    wizard_steps: list[dict] = Field(default_factory=list)  # [{step_index, label, fields}]
 
 
 class NetworkRequest(BaseModel):
@@ -62,7 +67,7 @@ class AuthFlow(BaseModel):
 class PageModel(BaseModel):
     page_id: str
     url: str
-    page_type: str = "static"  # listing, detail, form, dashboard, static, error
+    page_type: str = "static"  # listing, detail, form, dashboard, static, error, interactive
     title: str = ""
     elements: list[ElementModel] = Field(default_factory=list)
     forms: list[FormModel] = Field(default_factory=list)
@@ -70,6 +75,9 @@ class PageModel(BaseModel):
     screenshot_path: str = ""
     dom_snapshot_path: str = ""
     auth_required: Optional[bool] = None  # None = unknown, True = needs auth, False = public
+    fingerprint: str = ""  # state fingerprint hash (empty = URL-only mode)
+    parent_page_id: str = ""  # state we navigated from
+    trigger_action: Optional[dict] = None  # action that led here: {action_type, selector, description}
 
 
 class SiteModel(BaseModel):
@@ -79,3 +87,5 @@ class SiteModel(BaseModel):
     api_endpoints: list[APIEndpoint] = Field(default_factory=list)
     auth_flow: Optional[AuthFlow] = None
     crawl_metadata: dict[str, Any] = Field(default_factory=dict)
+    state_graph: dict[str, list[dict]] = Field(default_factory=dict)
+    # state_id -> [{target_state_id, action: {action_type, selector, description}}]

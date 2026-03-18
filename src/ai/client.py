@@ -332,26 +332,23 @@ class AIClient:
         original_text = text
         text = text.strip()
 
-        # Strip markdown code fences using regex for robustness
-        # Handles: ```json, ```, with/without language identifier, extra whitespace
+        # Strip markdown code fences — handles various formats:
+        # ```json\n{...}\n```, ```\n{...}\n```, or residual ``` markers
         fence_pattern = re.compile(
-            r'^```(?:json|python|javascript|)?\s*\n(.*?)\n```\s*$',
-            re.DOTALL | re.MULTILINE
+            r'```(?:json|python|javascript|)?\s*\n?(.*?)\n?```',
+            re.DOTALL,
         )
         match = fence_pattern.search(text)
         if match:
             text = match.group(1).strip()
             logger.debug("Stripped markdown code fences from AI response")
-        else:
-            logger.debug("No markdown code fences detected in AI response")
 
-        text = text.strip()
+        # Also handle case where text starts with a language identifier (no backticks)
+        # e.g., "json\n{..." from partially stripped fences
+        text = re.sub(r'^(?:json|JSON)\s*\n', '', text.strip()).strip()
 
-        # Validate that markdown was properly stripped
-        if text.startswith('```') or text.endswith('```'):
-            logger.warning("Markdown fences still present after stripping attempt")
-            # Try one more aggressive strip
-            text = text.lstrip('`').rstrip('`').strip()
+        # Aggressive strip of any remaining backticks
+        text = text.strip('`').strip()
 
         # Validate JSON boundaries exist
         if not text.startswith('{'):

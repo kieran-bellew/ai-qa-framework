@@ -18,6 +18,15 @@ class ViewportConfig(BaseModel):
     name: str = "desktop"
 
 
+class InteractionCrawlConfig(BaseModel):
+    enabled: bool = False
+    max_states: int = 50
+    max_depth: int = 5
+    skip_text_patterns: list[str] = Field(default_factory=lambda: [
+        "delete", "remove", "logout", "sign out", "cancel",
+    ])
+
+
 class CrawlConfig(BaseModel):
     target_url: str = ""
     max_pages: int = 10
@@ -29,6 +38,19 @@ class CrawlConfig(BaseModel):
     wait_for_idle: bool = True
     viewport: ViewportConfig = Field(default_factory=ViewportConfig)
     user_agent: Optional[str] = None
+    interaction: InteractionCrawlConfig = Field(default_factory=InteractionCrawlConfig)
+
+
+class PostAuthAction(BaseModel):
+    """An action to perform after login, before crawling begins.
+
+    Use this to navigate through multi-step entry flows (e.g., context
+    selectors, tenant pickers) so the crawler starts inside the app.
+    """
+    action_type: str  # click, click_text, click_label, fill, select, wait
+    selector: str = ""
+    value: str = ""
+    description: str = ""
 
 
 class AuthConfig(BaseModel):
@@ -41,6 +63,7 @@ class AuthConfig(BaseModel):
     success_indicator: str = ""
     auto_detect: bool = True
     llm_fallback: bool = True
+    post_auth_actions: list[PostAuthAction] = Field(default_factory=list)
 
     @field_validator("password", mode="before")
     @classmethod

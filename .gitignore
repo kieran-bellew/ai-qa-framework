@@ -10,7 +10,7 @@ runs/
 .playwright/
 
 # Local config
-qa-config.json
+*qa-config.json
 .env
 
 # Python artifacts

@@ -64,9 +64,17 @@ class CoverageGapReport(BaseModel):
     suggested_focus: list[str] = Field(default_factory=list)
 
 
+class JourneyCoverage(BaseModel):
+    journey_id: str
+    states_traversed: list[str] = Field(default_factory=list)
+    last_tested: str = ""
+    last_result: str = ""
+    test_count: int = 0
+
+
 class CoverageRegistry(BaseModel):
     target_url: str
     last_updated: str = ""
     pages: dict[str, PageCoverage] = Field(default_factory=dict)
-    journeys: dict = Field(default_factory=dict)
+    journeys: dict[str, JourneyCoverage] = Field(default_factory=dict)
     global_stats: GlobalCoverageStats = Field(default_factory=GlobalCoverageStats)

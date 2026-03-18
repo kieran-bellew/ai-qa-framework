@@ -29,10 +29,13 @@ async def resolve_selector(
     original_selector: str,
     timeout_ms: int = 10000,
     action_type: str = "",
+    selector_cache=None,
+    page_url: str = "",
 ) -> SelectorResolutionResult:
     """Try to find an element using progressively broader strategies.
 
     Strategy order:
+    0. Check selector cache for a known replacement (if cache provided)
     1. Original selector with the configured timeout
     2. Alternative selectors derived from the original (short timeouts)
     3. DOM stability wait + retry original
@@ -41,6 +44,30 @@ async def resolve_selector(
     all strategies failed.
     """
     attempts: list[dict] = []
+
+    # Strategy 0: Check selector cache for a previously-learned replacement
+    if selector_cache is not None:
+        cached = selector_cache.find(original_selector, page_url=page_url)
+        if cached:
+            cache_timeout = min(3000, timeout_ms)
+            if await _try_selector(page, cached.replacement_selector, cache_timeout):
+                logger.info(
+                    "Cache hit: '%s' -> '%s' (confidence=%.2f)",
+                    original_selector, cached.replacement_selector, cached.confidence,
+                )
+                selector_cache.record_success(
+                    original_selector, cached.replacement_selector,
+                    page_url=page_url, action_type=action_type, source="cache_hit",
+                )
+                return SelectorResolutionResult(
+                    resolved_selector=cached.replacement_selector,
+                    strategy_used="cache",
+                    attempts=[{"strategy": "cache", "selector": cached.replacement_selector, "success": True}],
+                )
+            else:
+                logger.debug("Cache miss (element not found): '%s'", cached.replacement_selector)
+                selector_cache.record_failure(original_selector, page_url=page_url)
+                attempts.append({"strategy": "cache", "selector": cached.replacement_selector, "success": False})
 
     # Strategy 1: Original selector with the full configured timeout
     if await _try_selector(page, original_selector, timeout_ms):

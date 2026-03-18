@@ -70,6 +70,20 @@ def analyze_gaps(
     if low_coverage_areas:
         suggested_focus.append(f"Improve {len(low_coverage_areas)} low-coverage areas")
 
+    # Detect untested state transitions
+    if site_model.state_graph:
+        tested_transitions: set[tuple[str, str]] = set()
+        for jc in registry.journeys.values():
+            states = jc.states_traversed if hasattr(jc, "states_traversed") else []
+            for i in range(len(states) - 1):
+                tested_transitions.add((states[i], states[i + 1]))
+        for src, transitions in site_model.state_graph.items():
+            for t in transitions:
+                if (src, t["target_state_id"]) not in tested_transitions:
+                    suggested_focus.append(
+                        f"Test transition {src} -> {t['target_state_id']}"
+                    )
+
     report = CoverageGapReport(
         untested_pages=untested_pages,
         stale_pages=stale_pages,

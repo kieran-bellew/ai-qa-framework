@@ -56,6 +56,7 @@ async def _resolve_effective_selector(
     timeout_ms: int,
     action_type: str,
     smart_resolve: bool,
+    selector_cache=None,
 ) -> str:
     """Resolve the effective selector using smart resolution if enabled.
 
@@ -64,7 +65,13 @@ async def _resolve_effective_selector(
     """
     if not smart_resolve:
         return selector
-    result = await resolve_selector(page, selector, timeout_ms=timeout_ms, action_type=action_type)
+    result = await resolve_selector(
+        page, selector,
+        timeout_ms=timeout_ms,
+        action_type=action_type,
+        selector_cache=selector_cache,
+        page_url=page.url,
+    )
     if result.resolved_selector:
         if result.strategy_used != "original":
             logger.info("Smart resolve: '%s' -> '%s' via %s",
@@ -76,6 +83,7 @@ async def _resolve_effective_selector(
 
 async def run_action(
     page: Page, action: Action, timeout: int = 10000, smart_resolve: bool = True,
+    selector_cache=None,
 ) -> None:
     """Execute a single action on the Playwright page.
 
@@ -106,7 +114,7 @@ async def run_action(
                 raise ValueError("click action requires a selector")
             await human_delay(page, min_ms=50, max_ms=250)
             effective = await _resolve_effective_selector(
-                page, action.selector, timeout, "click", smart_resolve)
+                page, action.selector, timeout, "click", smart_resolve, selector_cache)
             logger.debug("Clicking: %s", effective)
             await page.click(effective, timeout=timeout)
 
@@ -115,7 +123,7 @@ async def run_action(
                 raise ValueError("fill action requires a selector")
             await human_delay(page, min_ms=80, max_ms=300)
             effective = await _resolve_effective_selector(
-                page, action.selector, timeout, "fill", smart_resolve)
+                page, action.selector, timeout, "fill", smart_resolve, selector_cache)
             logger.debug("Filling %s with '%s'", effective,
                          "***" if "password" in (action.selector or "").lower() else action.value)
             await page.fill(effective, action.value or "", timeout=timeout)
@@ -125,7 +133,7 @@ async def run_action(
                 raise ValueError("select action requires a selector")
             await human_delay(page, min_ms=50, max_ms=250)
             effective = await _resolve_effective_selector(
-                page, action.selector, timeout, "select", smart_resolve)
+                page, action.selector, timeout, "select", smart_resolve, selector_cache)
             logger.debug("Selecting '%s' in %s", action.value, effective)
             await page.select_option(effective, action.value or "", timeout=timeout)
 
@@ -134,7 +142,7 @@ async def run_action(
                 raise ValueError("hover action requires a selector")
             await human_delay(page, min_ms=30, max_ms=150)
             effective = await _resolve_effective_selector(
-                page, action.selector, timeout, "hover", smart_resolve)
+                page, action.selector, timeout, "hover", smart_resolve, selector_cache)
             logger.debug("Hovering over: %s", effective)
             await page.hover(effective, timeout=timeout)
 
@@ -154,7 +162,7 @@ async def run_action(
         case "wait":
             if action.selector:
                 effective = await _resolve_effective_selector(
-                    page, action.selector, timeout, "wait", smart_resolve)
+                    page, action.selector, timeout, "wait", smart_resolve, selector_cache)
                 logger.debug("Waiting for selector: %s", effective)
                 await page.wait_for_selector(effective, timeout=timeout)
             elif action.value:

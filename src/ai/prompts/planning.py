@@ -81,6 +81,38 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
      These placeholders will be replaced with real credentials after plan generation. Do NOT invent usernames, passwords, or login URLs — always use these exact placeholder tokens when a test needs to interact with authentication fields.
    - If the site model has `"has_auth": false`, NO authentication credentials are configured. Do NOT generate any test cases that use `{{auth_login_url}}`, `{{auth_username}}`, or `{{auth_password}}` placeholder tokens. Do NOT generate tests that require logging in. Only test publicly accessible pages. If a page has `auth_required: true`, you may test that it redirects unauthenticated users or shows an access-denied state, but do NOT attempt to fill in login forms or navigate to login URLs.
 
+## Form Interaction Patterns
+
+When form fields include `interaction_pattern` and `interaction_steps`, use them:
+
+- **mat_select**: Do NOT use a `select` action. Instead: (1) click the trigger selector to open the dropdown, (2) wait 500ms, (3) use a click action on the `mat-option` with the desired text. Use `text=OptionText` as the selector for the option.
+- **mat_datepicker**: Fill the input directly with a date string (e.g., "01/15/2025").
+- **mat_checkbox** / **mat_slide_toggle**: Use a click action on the component selector.
+- **wizard forms** (`form_pattern: "wizard"`): Generate tests that complete all wizard steps in sequence. Use click to advance to each step via "Next" or step header buttons.
+- **dialog forms** (`form_pattern: "dialog"`): The form is inside a modal. Include an action to trigger the dialog before interacting with form fields.
+- **validation_rules**: Use these for negative tests. If a field has `error_message: "Required"`, test with empty input. If it has a pattern, test with invalid input.
+
+## State-Graph Aware Testing (when state_graph is provided)
+
+When the site model includes a `state_graph`, the app was explored via UI interactions.
+Each "page" may represent a distinct UI state at the same URL.
+
+Key fields on state pages:
+- `fingerprint`: content hash distinguishing states at the same URL
+- `parent_page_id`: the state this was discovered from
+- `trigger_action`: the click/interaction that reached this state
+- `state_graph`: maps state_id -> [{target_state_id, action}]
+
+### Journey Tests
+- Generate multi-step tests that traverse the state graph
+- Use preconditions to navigate to the starting state URL
+- Use steps to replay the interaction chain (click tab -> fill form -> submit)
+- Coverage signatures for journeys: "journey:<state1>-><state2>-><state3>"
+
+### State-specific Tests
+- target_page_id = the state_id (incorporates fingerprint)
+- Preconditions must include actions to reach that state from its parent
+
 Generate thorough but focused tests. Each test should verify one specific behavior."""
 
 
