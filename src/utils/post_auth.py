@@ -54,7 +54,10 @@ async def run_post_auth_actions(page: Page, actions: list) -> None:
                 else:
                     await page.locator(f"text='{value}'").first.click(timeout=5000)
             elif act_type == "click_label":
-                target_id = await page.evaluate("""(label) => {
+                # Find and click an interactive element by its form field label.
+                # Uses page.evaluate to locate, then clicks via JS to avoid
+                # CDK overlay and dynamic ID issues.
+                clicked = await page.evaluate("""(label) => {
                     const fields = document.querySelectorAll(
                         'mat-form-field, .form-group, .form-field'
                     );
@@ -68,28 +71,24 @@ async def run_post_auth_actions(page: Page, actions: list) -> None:
                             );
                             if (!target) continue;
 
-                            // For MDC mat-select, click the inner trigger
+                            // For mat-select: click the trigger directly via JS
                             if (target.tagName.toLowerCase() === 'mat-select') {
                                 const trigger = target.querySelector(
                                     '[role="combobox"], .mat-mdc-select-trigger, .mat-select-trigger'
                                 );
-                                if (trigger && target.id) {
-                                    return '#' + CSS.escape(target.id) + ' [role="combobox"]';
-                                }
+                                if (trigger) { trigger.click(); return 'clicked_trigger'; }
+                                target.click(); return 'clicked_select';
                             }
 
-                            if (target.id) return '#' + CSS.escape(target.id);
-                            const cls = target.className?.split?.(' ')?.[0];
-                            if (cls) return target.tagName.toLowerCase() + '.' + CSS.escape(cls);
-                            return target.tagName.toLowerCase();
+                            // For regular inputs: focus and click
+                            target.focus();
+                            target.click();
+                            return 'clicked_input';
                         }
                     }
                     return null;
                 }""", value)
-                if target_id:
-                    await page.wait_for_selector(target_id, state="visible", timeout=10000)
-                    await page.click(target_id, timeout=5000)
-                else:
+                if not clicked:
                     logger.warning("Post-auth: no form field found with label '%s'", value)
             elif act_type == "fill":
                 await page.wait_for_selector(selector, state="visible", timeout=10000)
