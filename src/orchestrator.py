@@ -82,11 +82,11 @@ class Orchestrator:
                      len(site_model.pages), time.time() - stage_start)
 
         # Stage 1b: Classify pages (AI-driven)
-        if self._ai_client and len(site_model.pages) > 0:
+        if self.ai_client and len(site_model.pages) > 0:
             try:
                 from src.planner.page_classifier import classify_pages
                 logger.info("--- Stage 1b: Classify pages ---")
-                classify_pages(site_model.pages, self._ai_client)
+                classify_pages(site_model.pages, self.ai_client)
             except Exception as e:
                 logger.warning("Page classification failed (non-fatal): %s", e)
 
