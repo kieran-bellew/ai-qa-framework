@@ -66,12 +66,22 @@ async def run_post_auth_actions(page: Page, actions: list) -> None:
                             const target = ff.querySelector(
                                 'mat-select, select, input, textarea'
                             );
-                            if (target && target.id) return '#' + CSS.escape(target.id);
-                            if (target) {
-                                const cls = target.className?.split?.(' ')?.[0];
-                                if (cls) return target.tagName.toLowerCase() + '.' + CSS.escape(cls);
-                                return target.tagName.toLowerCase();
+                            if (!target) continue;
+
+                            // For MDC mat-select, click the inner trigger
+                            if (target.tagName.toLowerCase() === 'mat-select') {
+                                const trigger = target.querySelector(
+                                    '[role="combobox"], .mat-mdc-select-trigger, .mat-select-trigger'
+                                );
+                                if (trigger && target.id) {
+                                    return '#' + CSS.escape(target.id) + ' [role="combobox"]';
+                                }
                             }
+
+                            if (target.id) return '#' + CSS.escape(target.id);
+                            const cls = target.className?.split?.(' ')?.[0];
+                            if (cls) return target.tagName.toLowerCase() + '.' + CSS.escape(cls);
+                            return target.tagName.toLowerCase();
                         }
                     }
                     return null;

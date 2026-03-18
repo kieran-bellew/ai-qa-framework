@@ -139,12 +139,31 @@ async def _detect_angular_material_fields(page: Page, form_model: FormModel) -> 
             }
             if (!formEl) formEl = document.body;
 
-            // Detect mat-select fields
+            // Detect mat-select fields (legacy + MDC)
             formEl.querySelectorAll('mat-select').forEach(sel => {
                 const ff = sel.closest('mat-form-field');
                 const label = ff?.querySelector('mat-label')?.textContent?.trim() || '';
                 const id = sel.id || '';
-                const triggerSel = id ? `#${CSS.escape(id)}` : 'mat-select';
+
+                // For MDC-based Material (v15+), click the inner trigger
+                // element instead of the mat-select itself.
+                // The trigger has role="combobox" or class mat-mdc-select-trigger.
+                const trigger = sel.querySelector('[role="combobox"], .mat-mdc-select-trigger, .mat-select-trigger');
+                let triggerSel;
+                if (trigger) {
+                    // Prefer the mat-select's ID with the trigger descendant
+                    if (id) {
+                        triggerSel = `#${CSS.escape(id)} [role="combobox"]`;
+                        // Verify it matches
+                        if (!document.querySelector(triggerSel)) {
+                            triggerSel = `#${CSS.escape(id)}`;
+                        }
+                    } else {
+                        triggerSel = 'mat-select [role="combobox"]';
+                    }
+                } else {
+                    triggerSel = id ? `#${CSS.escape(id)}` : 'mat-select';
+                }
 
                 results.push({
                     name: label || id,

@@ -560,6 +560,14 @@ class InteractionCrawler:
                 if (!sel || seen.has(sel)) continue;
                 seen.add(sel);
 
+                // For MDC mat-select, target the inner combobox trigger
+                if (el.tagName.toLowerCase() === 'mat-select') {
+                    const trigger = el.querySelector('[role="combobox"]');
+                    if (trigger && sel.startsWith('#')) {
+                        sel = sel + ' [role="combobox"]';
+                    }
+                }
+
                 // Get meaningful text (skip massive text blocks from containers)
                 let text = '';
                 const directText = Array.from(el.childNodes)
