@@ -312,6 +312,12 @@ class Planner:
                 steps = [Action(**a) for a in tc_data.get("steps", [])]
                 assertions = [Assertion(**a) for a in tc_data.get("assertions", [])]
 
+                # Fix: AI sometimes puts all actions in preconditions with empty steps.
+                # Move preconditions to steps if steps is empty.
+                if not steps and preconditions:
+                    steps = preconditions
+                    preconditions = []
+
                 tc = TestCase(
                     test_id=tc_data.get("test_id", f"tc_{uuid.uuid4().hex[:6]}"),
                     name=tc_data.get("name", "Unnamed test"),
