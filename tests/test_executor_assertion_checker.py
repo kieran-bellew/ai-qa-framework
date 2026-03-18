@@ -229,8 +229,8 @@ class TestCheckAssertion:
     async def test_no_console_errors_failure(self, mock_page, temp_evidence_dir):
         """Test no_console_errors assertion fails when errors exist."""
         console_errors = [
-            "Error: Failed to load resource",
-            "TypeError: undefined is not a function",
+            "[error] TypeError: undefined is not a function",
+            "[error] Uncaught ReferenceError: foo is not defined",
         ]
 
         assertion = Assertion(assertion_type="no_console_errors")

@@ -25,9 +25,12 @@ class EvidenceCollector:
 
     def setup_listeners(self, page: Page) -> None:
         """Attach console and network listeners to a page."""
-        page.on("console", lambda msg: self.console_logs.append(
-            f"[{msg.type}] {msg.text}"
-        ))
+        def _on_console(msg):
+            # Only capture error and warning types to reduce noise
+            if msg.type in ("error", "warning"):
+                self.console_logs.append(f"[{msg.type}] {msg.text}")
+
+        page.on("console", _on_console)
         page.on("response", lambda resp: self.network_log.append({
             "url": resp.url,
             "method": resp.request.method,

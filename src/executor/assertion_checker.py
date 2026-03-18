@@ -70,7 +70,8 @@ async def check_assertion(
             case "network_request_made":
                 return _check_network_request(assertion, network_log)
             case "no_console_errors":
-                return _check_no_console_errors(console_errors)
+                ignore_patterns = config.console_error_ignore_patterns if config else []
+                return _check_no_console_errors(console_errors, ignore_patterns)
             case "response_status":
                 return _check_response_status(assertion, network_log)
             case "ai_evaluate":
@@ -376,14 +377,39 @@ def _check_network_request(assertion: Assertion, network_log: list[dict] | None)
     return AssertionResult(False, f"No request matching '{assertion.expected_value}'")
 
 
-def _check_no_console_errors(console_errors: list[str] | None) -> AssertionResult:
+def _check_no_console_errors(
+    console_errors: list[str] | None,
+    ignore_patterns: list[str] | None = None,
+) -> AssertionResult:
     if not console_errors:
         return AssertionResult(True, "No console errors")
-    # Filter out benign warnings
-    real_errors = [e for e in console_errors if "error" in e.lower() and "favicon" not in e.lower()]
+
+    ignore = ignore_patterns or []
+
+    # Only consider [error] type messages (not [warning] or [log])
+    errors = [e for e in console_errors if e.startswith("[error]")]
+
+    if not errors:
+        return AssertionResult(True, "No console errors")
+
+    # Filter out known benign errors
+    real_errors = []
+    for err in errors:
+        err_lower = err.lower()
+        if any(pat.lower() in err_lower for pat in ignore):
+            continue
+        real_errors.append(err)
+
     if not real_errors:
-        return AssertionResult(True, "No significant console errors")
-    return AssertionResult(False, f"{len(real_errors)} console error(s): {real_errors[0][:100]}")
+        filtered = len(errors) - len(real_errors)
+        return AssertionResult(True, f"No console errors ({filtered} known issues filtered)")
+
+    # Deduplicate — same error appearing 50 times is still one problem
+    unique_errors = list(dict.fromkeys(real_errors))
+    return AssertionResult(
+        False,
+        f"{len(unique_errors)} unique console error(s): {unique_errors[0][:150]}",
+    )
 
 
 def _check_response_status(assertion: Assertion, network_log: list[dict] | None) -> AssertionResult:

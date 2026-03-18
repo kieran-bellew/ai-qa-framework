@@ -110,6 +110,21 @@ class FrameworkConfig(BaseModel):
     ai_max_fallback_calls_per_test: int = 3
     ai_max_planning_tokens: int = 32000  # Increased to support large test plans
 
+    # Console error handling
+    console_error_ignore_patterns: list[str] = Field(default_factory=lambda: [
+        "favicon",
+        "third-party cookie",
+        "DevTools",
+        "Download the React DevTools",
+        "Angular is running in development mode",
+        "net::ERR_",
+        "Failed to load resource",
+        "the server responded with a status of 404",
+        "Unrecognized feature",
+        "crbug.com",
+        "violates the following Content Security Policy",
+    ])
+
     # Coverage settings
     staleness_threshold_days: int = 7
     history_retention_runs: int = 20
