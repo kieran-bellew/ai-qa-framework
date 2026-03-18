@@ -92,10 +92,8 @@ async def run_post_auth_actions(page: Page, actions: list) -> None:
                 continue
 
             # Wait for SPA transition after each action
-            try:
-                await page.wait_for_load_state("networkidle", timeout=5000)
-            except Exception:
-                await page.wait_for_timeout(1000)
+            from src.utils.smart_wait import wait_for_stable
+            await wait_for_stable(page, timeout_ms=5000)
 
         except Exception as e:
             logger.error("Post-auth action failed [%d] %s: %s", i + 1, desc, e)

@@ -81,22 +81,45 @@ class Orchestrator:
         logger.info("--- Stage 1 complete: %d pages discovered in %.1fs ---",
                      len(site_model.pages), time.time() - stage_start)
 
-        # Stage 1b: Classify pages (AI-driven)
-        if self.ai_client and len(site_model.pages) > 0:
-            try:
-                from src.planner.page_classifier import classify_pages
-                logger.info("--- Stage 1b: Classify pages ---")
-                classify_pages(site_model.pages, self.ai_client)
-            except Exception as e:
-                logger.warning("Page classification failed (non-fatal): %s", e)
-
-        # Stage 2: Plan
-        logger.info("--- Stage 2: Plan ---")
+        # Stage 1b + 2: Classify pages and plan (classification runs in
+        # background while plan cache is checked)
+        logger.info("--- Stage 2: Classify + Plan ---")
         stage_start = time.time()
-        plan = self._plan(site_model)
+
+        from src.planner.plan_cache import compute_site_hash, load_cached_plan, save_plan_with_hash
+        from concurrent.futures import ThreadPoolExecutor
+
+        site_hash = compute_site_hash(site_model)
+        cache_path = self.framework_dir / "plan_cache.json"
+        cached_plan = load_cached_plan(cache_path, site_hash)
+
+        if cached_plan:
+            # Still classify for future runs, but don't block
+            if self.ai_client and len(site_model.pages) > 0:
+                try:
+                    from src.planner.page_classifier import classify_pages
+                    with ThreadPoolExecutor(max_workers=1) as pool:
+                        pool.submit(classify_pages, site_model.pages, self.ai_client)
+                except Exception:
+                    pass
+            plan = cached_plan
+            logger.info("--- Stage 2 complete: %d cached test cases (%.1fs) ---",
+                         len(plan.test_cases), time.time() - stage_start)
+        else:
+            # Classify pages first (needed for planning quality)
+            if self.ai_client and len(site_model.pages) > 0:
+                try:
+                    from src.planner.page_classifier import classify_pages
+                    classify_pages(site_model.pages, self.ai_client)
+                except Exception as e:
+                    logger.warning("Page classification failed (non-fatal): %s", e)
+
+            plan = self._plan(site_model)
+            save_plan_with_hash(cache_path, plan, site_hash)
+            logger.info("--- Stage 2 complete: %d test cases generated in %.1fs ---",
+                         len(plan.test_cases), time.time() - stage_start)
+
         self._save_plan(plan)
-        logger.info("--- Stage 2 complete: %d test cases generated in %.1fs ---",
-                     len(plan.test_cases), time.time() - stage_start)
 
         # Stage 3: Execute
         logger.info("--- Stage 3: Execute (%d tests) ---", len(plan.test_cases))
@@ -105,6 +128,47 @@ class Orchestrator:
         self._save_run_result(run_result)
         logger.info("--- Stage 3 complete: %d passed, %d failed in %.1fs ---",
                      run_result.passed, run_result.failed, time.time() - stage_start)
+
+        # Stage 3b: Refine failed tests and re-execute (if failures exist)
+        if run_result.failed > 0 and self.ai_client:
+            try:
+                from src.planner.refiner import TestRefiner
+
+                refiner = TestRefiner(self.config, self.ai_client)
+                refined_tests = refiner.refine_failures(
+                    run_result, plan.test_cases, max_refinements=min(10, run_result.failed),
+                )
+                if refined_tests:
+                    logger.info("--- Stage 3b: Re-executing %d refined tests ---", len(refined_tests))
+                    refined_plan = TestPlan(
+                        plan_id=f"refined_{plan.plan_id}",
+                        generated_at=time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                        target_url=plan.target_url,
+                        test_cases=refined_tests,
+                    )
+                    refined_result = await self._execute(refined_plan)
+
+                    # Merge: replace failed originals with refined results
+                    refined_by_sig = {
+                        tr.coverage_signature: tr for tr in refined_result.test_results
+                        if tr.result == "pass"
+                    }
+                    if refined_by_sig:
+                        updated_results = []
+                        for tr in run_result.test_results:
+                            if tr.result in ("fail", "error") and tr.coverage_signature in refined_by_sig:
+                                updated_results.append(refined_by_sig[tr.coverage_signature])
+                            else:
+                                updated_results.append(tr)
+                        run_result.test_results = updated_results
+                        run_result.passed = sum(1 for r in updated_results if r.result == "pass")
+                        run_result.failed = sum(1 for r in updated_results if r.result == "fail")
+                        run_result.errors = sum(1 for r in updated_results if r.result == "error")
+                        self._save_run_result(run_result)
+                        logger.info("Refinement improved: %d tests now pass",
+                                   len(refined_by_sig))
+            except Exception as e:
+                logger.warning("Test refinement failed (non-fatal): %s", e)
 
         # Stage 4: Update coverage
         logger.info("--- Stage 4: Update Coverage ---")

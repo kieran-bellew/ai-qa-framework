@@ -57,6 +57,8 @@ async def check_assertion(
                 return await _check_text_equals(page, assertion)
             case "text_matches":
                 return await _check_text_matches(page, assertion)
+            case "text_not_contains":
+                return await _check_text_not_contains(page, assertion)
             case "url_matches":
                 return _check_url_matches(page, assertion)
             case "screenshot_diff":
@@ -139,6 +141,24 @@ async def _check_text_contains(page: Page, assertion: Assertion) -> AssertionRes
         if assertion.expected_value.lower() in body.lower():
             return AssertionResult(True, f"Found '{assertion.expected_value}' in page")
         return AssertionResult(False, f"'{assertion.expected_value}' not in page")
+
+
+async def _check_text_not_contains(page: Page, assertion: Assertion) -> AssertionResult:
+    """Assert that text does NOT contain the expected value (useful for security tests)."""
+    if not assertion.expected_value:
+        return AssertionResult(False, "No expected_value")
+    if assertion.selector:
+        try:
+            el = await page.wait_for_selector(assertion.selector, timeout=5000)
+            text = await el.text_content() or "" if el else ""
+        except Exception:
+            text = ""
+    else:
+        text = await page.text_content("body") or ""
+
+    if assertion.expected_value.lower() not in text.lower():
+        return AssertionResult(True, f"'{assertion.expected_value}' correctly absent from text")
+    return AssertionResult(False, f"'{assertion.expected_value}' found in text (should be absent)")
 
 
 async def _check_text_equals(page: Page, assertion: Assertion) -> AssertionResult:

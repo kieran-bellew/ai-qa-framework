@@ -10,6 +10,7 @@ from playwright.async_api import Page
 
 from src.models.test_plan import Action
 from src.utils.browser_stealth import human_delay
+from src.utils.smart_wait import wait_for_stable, wait_after_action
 from .selector_resolver import resolve_selector
 
 logger = logging.getLogger(__name__)
@@ -57,6 +58,7 @@ async def _resolve_effective_selector(
     action_type: str,
     smart_resolve: bool,
     selector_cache=None,
+    element_baselines=None,
 ) -> str:
     """Resolve the effective selector using smart resolution if enabled.
 
@@ -71,6 +73,7 @@ async def _resolve_effective_selector(
         action_type=action_type,
         selector_cache=selector_cache,
         page_url=page.url,
+        element_baselines=element_baselines,
     )
     if result.resolved_selector:
         if result.strategy_used != "original":
@@ -83,7 +86,7 @@ async def _resolve_effective_selector(
 
 async def run_action(
     page: Page, action: Action, timeout: int = 10000, smart_resolve: bool = True,
-    selector_cache=None,
+    selector_cache=None, element_baselines=None,
 ) -> None:
     """Execute a single action on the Playwright page.
 
@@ -103,10 +106,7 @@ async def run_action(
             url = action.value or action.selector or ""
             logger.debug("Navigating to %s...", url)
             await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=min(timeout, 10000))
-            except Exception:
-                logger.debug("Network idle timeout, continuing")
+            await wait_for_stable(page, timeout_ms=min(timeout, 10000))
 
         case "spa_navigate":
             # Navigate within an SPA by clicking a nav link rather than
@@ -153,27 +153,26 @@ async def run_action(
                     )
                 except Exception:
                     pass
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=5000)
-                except Exception:
-                    await page.wait_for_timeout(1000)
+                await wait_for_stable(page, timeout_ms=5000)
             else:
-                # Fallback to regular navigation
                 logger.debug("SPA navigate: no nav link found for %s, falling back to goto", target_path)
                 await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=min(timeout, 10000))
-                except Exception:
-                    pass
+                await wait_for_stable(page, timeout_ms=min(timeout, 10000))
 
         case "click":
             if not action.selector:
                 raise ValueError("click action requires a selector")
             await human_delay(page, min_ms=50, max_ms=250)
             effective = await _resolve_effective_selector(
-                page, action.selector, timeout, "click", smart_resolve, selector_cache)
-            logger.debug("Clicking: %s", effective)
-            await page.click(effective, timeout=timeout)
+                page, action.selector, timeout, "click", smart_resolve,
+                selector_cache, element_baselines)
+            if effective.startswith("__visual_match:"):
+                # Visual match: click at coordinates
+                coords = effective.replace("__visual_match:", "").split(",")
+                await page.mouse.click(int(coords[0]), int(coords[1]))
+            else:
+                logger.debug("Clicking: %s", effective)
+                await page.click(effective, timeout=timeout)
 
         case "fill":
             if not action.selector:
@@ -246,3 +245,10 @@ async def run_action(
 
         case _:
             logger.warning("Unknown action type: %s", action.action_type)
+
+    # Capture element baseline after successful interaction (for visual recovery)
+    if element_baselines and action.selector and action.action_type in ("click", "fill", "select"):
+        try:
+            await element_baselines.capture_element(page, action.selector, action.action_type)
+        except Exception:
+            pass

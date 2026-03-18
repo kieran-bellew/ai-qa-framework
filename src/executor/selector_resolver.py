@@ -31,6 +31,7 @@ async def resolve_selector(
     action_type: str = "",
     selector_cache=None,
     page_url: str = "",
+    element_baselines=None,
 ) -> SelectorResolutionResult:
     """Try to find an element using progressively broader strategies.
 
@@ -39,6 +40,7 @@ async def resolve_selector(
     1. Original selector with the configured timeout
     2. Alternative selectors derived from the original (short timeouts)
     3. DOM stability wait + retry original
+    4. Visual element matching (if baselines available)
 
     Returns a SelectorResolutionResult. If resolved_selector is None,
     all strategies failed.
@@ -109,6 +111,21 @@ async def resolve_selector(
             attempts=attempts + [{"strategy": "dom_stability_retry", "selector": original_selector, "success": True}],
         )
     attempts.append({"strategy": "dom_stability_retry", "selector": original_selector, "success": False})
+
+    # Strategy 4: Visual element matching (find by baseline screenshot)
+    if element_baselines:
+        try:
+            visual_match = await element_baselines.find_element_visually(page, original_selector)
+            if visual_match:
+                logger.info("Smart resolve: '%s' found via visual matching", original_selector)
+                return SelectorResolutionResult(
+                    resolved_selector=visual_match,
+                    strategy_used="visual_match",
+                    attempts=attempts + [{"strategy": "visual_match", "selector": visual_match, "success": True}],
+                )
+        except Exception as e:
+            logger.debug("Visual matching failed: %s", e)
+        attempts.append({"strategy": "visual_match", "selector": "", "success": False})
 
     # All strategies exhausted
     logger.debug("Smart resolve: all strategies failed for '%s' (%d attempts)", original_selector, len(attempts))

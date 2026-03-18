@@ -823,40 +823,8 @@ class InteractionCrawler:
         except Exception as e:
             logger.debug("Failed to restore web storage: %s", e)
 
-    async def _wait_for_stable(self, page: Page) -> None:
-        """Wait for the page to stabilize after navigation or interaction.
-
-        Angular apps often have route transitions, lazy module loading, and
-        animations that need more time than a simple networkidle check.
-        """
-        # First wait for Angular to finish rendering (if Angular is present)
-        try:
-            await page.evaluate("""() => {
-                return new Promise((resolve) => {
-                    // If Angular testability API is available, wait for it
-                    if (window.getAllAngularTestabilities) {
-                        const testabilities = window.getAllAngularTestabilities();
-                        if (testabilities.length > 0) {
-                            testabilities[0].whenStable(() => resolve(true));
-                            // Safety timeout — don't wait forever
-                            setTimeout(() => resolve(false), 5000);
-                            return;
-                        }
-                    }
-                    // If ng.probe exists (older Angular), wait a bit for digest
-                    if (window.ng) {
-                        setTimeout(() => resolve(true), 500);
-                        return;
-                    }
-                    // Not Angular, resolve immediately
-                    resolve(true);
-                });
-            }""")
-        except Exception:
-            pass
-
-        # Then wait for network idle
-        try:
-            await page.wait_for_load_state("networkidle", timeout=5000)
-        except Exception:
-            await page.wait_for_timeout(2000)
+    @staticmethod
+    async def _wait_for_stable(page: Page) -> None:
+        """Wait for the page to stabilize after navigation or interaction."""
+        from src.utils.smart_wait import wait_for_stable
+        await wait_for_stable(page, timeout_ms=5000)

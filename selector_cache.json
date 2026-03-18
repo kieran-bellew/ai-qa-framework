@@ -12,7 +12,7 @@
       "last_success": "2026-03-18T16:06:38Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 1.0
+      "confidence": 0.95
     },
     {
       "original_selector": "[name='mat-input-0']",
@@ -24,7 +24,7 @@
       "last_success": "2026-03-18T16:13:44Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 1.0
+      "confidence": 0.95
     },
     {
       "original_selector": "[name='mat-input-0']",
@@ -36,7 +36,7 @@
       "last_success": "2026-03-18T16:13:44Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 1.0
+      "confidence": 0.95
     },
     {
       "original_selector": "[name='mat-input-0']",
@@ -48,8 +48,56 @@
       "last_success": "2026-03-18T16:14:51Z",
       "last_failure": "",
       "source": "ai_fallback",
+      "confidence": 0.95
+    },
+    {
+      "original_selector": "#mat-select-12",
+      "replacement_selector": "text=Items per page:",
+      "page_url_pattern": "/supply/shipments",
+      "action_type": "click",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T17:03:31Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    },
+    {
+      "original_selector": "th[role='columnheader']:first-child",
+      "replacement_selector": "text=Kit ID",
+      "page_url_pattern": "/reports/kit_audit_trail",
+      "action_type": "click",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T17:06:12Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    },
+    {
+      "original_selector": "th[role='columnheader']:first-child",
+      "replacement_selector": "text=Resupply Date",
+      "page_url_pattern": "/reports/resupply_site_summary",
+      "action_type": "click",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T17:12:39Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
+    },
+    {
+      "original_selector": "#mat-input-41",
+      "replacement_selector": "input[matinput][type='text'], input[matinput], input.mat-input-element, input[id^='mat-input']",
+      "page_url_pattern": "/supply/inventory",
+      "action_type": "fill",
+      "success_count": 1,
+      "failure_count": 0,
+      "last_success": "2026-03-18T17:13:09Z",
+      "last_failure": "",
+      "source": "ai_fallback",
       "confidence": 1.0
     }
   ],
-  "updated_at": "2026-03-18T16:20:53Z"
+  "updated_at": "2026-03-18T17:14:14Z"
 }

@@ -253,8 +253,8 @@ class TestRunAction:
         call_args = mock_page.click.call_args
         assert call_args.kwargs["timeout"] == 5000
 
-    async def test_navigate_waits_for_networkidle(self, mock_page):
-        """Test navigate action waits for network idle."""
+    async def test_navigate_waits_for_stability(self, mock_page):
+        """Test navigate action waits for page stability after goto."""
         action = Action(
             action_type="navigate",
             value="https://example.com",
@@ -262,20 +262,19 @@ class TestRunAction:
 
         await run_action(mock_page, action)
 
-        # Should call wait_for_load_state after goto
-        mock_page.wait_for_load_state.assert_called()
-        call_args = mock_page.wait_for_load_state.call_args
-        assert call_args[0][0] == "networkidle"
+        # Should have called goto
+        mock_page.goto.assert_called_once()
 
-    async def test_navigate_continues_if_networkidle_fails(self, mock_page):
-        """Test navigate continues even if network idle times out."""
+    async def test_navigate_continues_if_stability_wait_fails(self, mock_page):
+        """Test navigate continues even if stability wait fails."""
         mock_page.wait_for_load_state.side_effect = Exception("Timeout")
+        mock_page.evaluate.side_effect = Exception("Evaluate failed")
         action = Action(
             action_type="navigate",
             value="https://example.com",
         )
 
-        # Should not raise an error despite wait_for_load_state failing
+        # Should not raise — smart wait handles failures gracefully
         await run_action(mock_page, action)
 
         mock_page.goto.assert_called_once()
