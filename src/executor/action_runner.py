@@ -51,6 +51,30 @@ def resolve_dynamic_vars_for_test_case(actions: list[Action]) -> None:
             action.value = _resolve_dynamic_vars(action.value, resolved)
 
 
+async def _dismiss_cdk_overlays(page: Page) -> None:
+    """Dismiss open Angular CDK overlays/menus that block pointer events."""
+    try:
+        dismissed = await page.evaluate("""() => {
+            let count = 0;
+            // Click backdrop to close any open overlay (menu, select panel, dialog)
+            document.querySelectorAll('.cdk-overlay-backdrop').forEach(el => {
+                el.click();
+                count++;
+            });
+            return count;
+        }""")
+        if dismissed:
+            await page.wait_for_timeout(300)
+    except Exception:
+        pass
+    # Also try Escape as universal dismiss
+    try:
+        await page.keyboard.press("Escape")
+        await page.wait_for_timeout(200)
+    except Exception:
+        pass
+
+
 async def _resolve_effective_selector(
     page: Page,
     selector: str,
@@ -163,16 +187,26 @@ async def run_action(
             if not action.selector:
                 raise ValueError("click action requires a selector")
             await human_delay(page, min_ms=50, max_ms=250)
+            # Dismiss any open CDK overlays that block pointer events
+            await _dismiss_cdk_overlays(page)
             effective = await _resolve_effective_selector(
                 page, action.selector, timeout, "click", smart_resolve,
                 selector_cache, element_baselines)
             if effective.startswith("__visual_match:"):
-                # Visual match: click at coordinates
                 coords = effective.replace("__visual_match:", "").split(",")
                 await page.mouse.click(int(coords[0]), int(coords[1]))
             else:
                 logger.debug("Clicking: %s", effective)
-                await page.click(effective, timeout=timeout)
+                try:
+                    await page.click(effective, timeout=timeout)
+                except Exception as click_err:
+                    # Retry after dismissing overlays (may have appeared during resolve)
+                    if "intercepts pointer events" in str(click_err):
+                        logger.debug("Overlay blocking click, dismissing and retrying")
+                        await _dismiss_cdk_overlays(page)
+                        await page.click(effective, timeout=timeout)
+                    else:
+                        raise
 
         case "fill":
             if not action.selector:
