@@ -102,21 +102,21 @@ async def analyze_forms(page: Page) -> list[FormModel]:
             )
 
         # Enrich with Angular Material component detection (parallel).
-        # These are read-only page.evaluate() calls — safe to run concurrently.
+        # Run Angular Material detection concurrently (all read-only evaluations)
         import asyncio
 
-        mat_tasks = [
-            _detect_angular_material_fields(page, fm) for fm in forms
-        ]
-        orphan_task = asyncio.create_task(_detect_angular_material_forms(page))
-        mat_tasks_gathered = asyncio.gather(*mat_tasks, return_exceptions=True)
-
-        await mat_tasks_gathered  # enrichment is in-place on form_model
-        try:
-            angular_forms = await orphan_task
-            forms.extend(angular_forms)
-        except Exception:
-            pass
+        results = await asyncio.gather(
+            asyncio.gather(
+                *[_detect_angular_material_fields(page, fm) for fm in forms],
+                return_exceptions=True,
+            ),
+            _detect_angular_material_forms(page),
+            return_exceptions=True,
+        )
+        # results[0] = enrichment results (in-place), results[1] = orphan forms
+        orphan_forms = results[1]
+        if isinstance(orphan_forms, list):
+            forms.extend(orphan_forms)
 
         logger.debug("Analyzed %d forms", len(forms))
         return forms

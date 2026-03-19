@@ -52,6 +52,37 @@ def resolve_dynamic_vars_for_test_case(actions: list[Action]) -> None:
             action.value = _resolve_dynamic_vars(action.value, resolved)
 
 
+_NAV_LINK_FIND_JS = """(targetPath) => {
+    const candidates = document.querySelectorAll(
+        'a[href], a[routerLink], a[routerlink], [routerLink], [routerlink]'
+    );
+    for (const el of candidates) {
+        const href = el.getAttribute('href') || '';
+        const rl = el.getAttribute('routerLink') || el.getAttribute('routerlink') || '';
+        const match = [href, rl].some(v => {
+            const clean = v.replace(/^#/, '').replace(/\\?.*$/, '').replace(/\\/$/, '');
+            return clean === targetPath || clean === targetPath.replace(/^\\//,'');
+        });
+        if (match && el.offsetParent !== null) {
+            if (el.id) return '#' + CSS.escape(el.id);
+            if (el.getAttribute('data-testid'))
+                return '[data-testid="' + el.getAttribute('data-testid') + '"]';
+            if (el.getAttribute('routerLink'))
+                return '[routerLink="' + el.getAttribute('routerLink') + '"]';
+            if (el.getAttribute('routerlink'))
+                return '[routerlink="' + el.getAttribute('routerlink') + '"]';
+            return null;
+        }
+    }
+    return null;
+}"""
+
+
+async def _find_nav_link(page: Page, target_path: str) -> str | None:
+    """Find a visible nav link matching the target path."""
+    return await page.evaluate(_NAV_LINK_FIND_JS, target_path)
+
+
 async def _expand_menu_and_find_link(page: Page, target_path: str) -> str | None:
     """Try expanding sidebar/nav menu sections to reveal a hidden link.
 
@@ -87,36 +118,8 @@ async def _expand_menu_and_find_link(page: Page, target_path: str) -> str | None
         }""", target_path)
 
         if result and result.get("expanded"):
-            # Wait for expansion animation
             await page.wait_for_timeout(500)
-
-            # Now search for the link again
-            from urllib.parse import urlparse as _urlparse
-            nav_selector = await page.evaluate("""(targetPath) => {
-                const candidates = document.querySelectorAll(
-                    'a[href], a[routerLink], a[routerlink], [routerLink], [routerlink]'
-                );
-                for (const el of candidates) {
-                    const href = el.getAttribute('href') || '';
-                    const rl = el.getAttribute('routerLink') || el.getAttribute('routerlink') || '';
-                    const match = [href, rl].some(v => {
-                        const clean = v.replace(/^#/, '').replace(/\\?.*$/, '').replace(/\\/$/, '');
-                        return clean === targetPath || clean === targetPath.replace(/^\\//,'');
-                    });
-                    if (match && el.offsetParent !== null) {
-                        if (el.id) return '#' + CSS.escape(el.id);
-                        if (el.getAttribute('data-testid'))
-                            return '[data-testid="' + el.getAttribute('data-testid') + '"]';
-                        if (el.getAttribute('routerLink'))
-                            return '[routerLink="' + el.getAttribute('routerLink') + '"]';
-                        if (el.getAttribute('routerlink'))
-                            return '[routerlink="' + el.getAttribute('routerlink') + '"]';
-                        return null;
-                    }
-                }
-                return null;
-            }""", target_path)
-            return nav_selector
+            return await _find_nav_link(page, target_path)
 
     except Exception as e:
         logger.debug("Menu expansion failed: %s", e)
@@ -187,32 +190,7 @@ async def run_action(
             from urllib.parse import urlparse
             target_path = urlparse(url).path.rstrip("/") or "/"
 
-            # Try to find and click a nav link matching the target path
-            nav_selector = await page.evaluate("""(targetPath) => {
-                // Search for links with matching href or routerLink
-                const candidates = document.querySelectorAll(
-                    'a[href], a[routerLink], a[routerlink], [routerLink], [routerlink]'
-                );
-                for (const el of candidates) {
-                    const href = el.getAttribute('href') || '';
-                    const rl = el.getAttribute('routerLink') || el.getAttribute('routerlink') || '';
-                    const match = [href, rl].some(v => {
-                        const clean = v.replace(/^#/, '').replace(/\\?.*$/, '').replace(/\\/$/, '');
-                        return clean === targetPath || clean === targetPath.replace(/^\\//,'');
-                    });
-                    if (match && el.offsetParent !== null) {
-                        if (el.id) return '#' + CSS.escape(el.id);
-                        if (el.getAttribute('data-testid'))
-                            return '[data-testid="' + el.getAttribute('data-testid') + '"]';
-                        if (el.getAttribute('routerLink'))
-                            return '[routerLink="' + el.getAttribute('routerLink') + '"]';
-                        if (el.getAttribute('routerlink'))
-                            return '[routerlink="' + el.getAttribute('routerlink') + '"]';
-                        return null;
-                    }
-                }
-                return null;
-            }""", target_path)
+            nav_selector = await _find_nav_link(page, target_path)
 
             if nav_selector:
                 logger.debug("SPA navigate: clicking '%s' for %s", nav_selector, target_path)

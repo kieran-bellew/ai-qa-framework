@@ -529,52 +529,41 @@ async def _verify_login_success(page: Page, auth_config: AuthConfig) -> bool:
 
         # Success: URL changed away from login
         current_url = page.url
-        current_path = current_url.rstrip("/")
-        if current_path != login_path:
+        if current_url.rstrip("/") != login_path:
             logger.info("Smart auth: URL changed to %s — login succeeded", current_url)
             return True
 
-        # Failure: password field visible (form reappeared after API error)
+        # Single evaluate call: check password field + error messages atomically
         try:
-            has_password = await page.evaluate("""() => {
+            state = await page.evaluate("""() => {
                 const pw = document.querySelector('input[type="password"]');
-                if (!pw) return false;
-                const rect = pw.getBoundingClientRect();
-                return rect.width > 0 && rect.height > 0;
-            }""")
-        except Exception:
-            has_password = False
-
-        # Also check for error messages on the page
-        try:
-            has_error = await page.evaluate("""() => {
-                const selectors = [
+                const pwVisible = pw
+                    ? (r => r.width > 0 && r.height > 0)(pw.getBoundingClientRect())
+                    : false;
+                const errorSels = [
                     '.error', '.alert-danger', '.mat-error', '.mat-mdc-form-field-error',
                     '[role="alert"]', '.login-error', '.snack-bar-container',
                     'mat-snack-bar-container', '.mat-snack-bar-container',
-                    '.cdk-overlay-pane .mat-mdc-snack-bar-container',
                 ];
-                for (const sel of selectors) {
+                let errorText = '';
+                for (const sel of errorSels) {
                     const el = document.querySelector(sel);
-                    if (el && el.textContent.trim()) return el.textContent.trim().substring(0, 200);
+                    if (el && el.textContent.trim()) {
+                        errorText = el.textContent.trim().substring(0, 200);
+                        break;
+                    }
                 }
-                return '';
+                return { pwVisible, errorText };
             }""")
         except Exception:
-            has_error = ""
+            state = {"pwVisible": False, "errorText": ""}
 
-        if has_error:
-            logger.warning("Smart auth: error on page: %s", has_error)
+        if state["errorText"]:
+            logger.warning("Smart auth: error on page: %s", state["errorText"])
             return False
 
-        if has_password:
-            # Password field visible and no URL change — still on login
-            # Keep polling; the form might be visible during submission
-            continue
-
-        # Password field gone, URL same — could be mid-transition
-        # Keep polling to see if URL changes
-        continue
+        # Password visible + no URL change = still on login, keep polling
+        # Password gone + no URL change = mid-transition, keep polling
 
     # Timed out waiting — check final state
     final_url = page.url

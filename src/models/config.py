@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -51,7 +51,7 @@ class PostAuthAction(BaseModel):
     Use this to navigate through multi-step entry flows (e.g., context
     selectors, tenant pickers) so the crawler starts inside the app.
     """
-    action_type: str  # click, click_text, click_label, fill, select, wait
+    action_type: Literal["click", "click_text", "click_label", "fill", "select", "wait"]
     selector: str = ""
     value: str = ""
     description: str = ""

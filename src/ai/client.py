@@ -270,7 +270,7 @@ class AIClient:
                 response = self._call_with_retry(
                     lambda: self.client.messages.create(
                         model=self.model,
-                        max_tokens=max_tokens or self.max_tokens,
+                        max_tokens=tokens,
                         system=system_prompt,
                         messages=[
                             {

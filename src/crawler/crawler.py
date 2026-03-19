@@ -950,21 +950,5 @@ class Crawler:
 
     @staticmethod
     async def _restore_web_storage(page: Page, storage: dict) -> None:
-        """Restore localStorage and sessionStorage, then reload so the SPA picks up the tokens."""
-        try:
-            await page.evaluate("""(storage) => {
-                for (const [k, v] of storage.localStorage) {
-                    localStorage.setItem(k, v);
-                }
-                for (const [k, v] of storage.sessionStorage) {
-                    sessionStorage.setItem(k, v);
-                }
-            }""", storage)
-            # Reload so the SPA reads the restored tokens on bootstrap
-            await page.reload(wait_until="domcontentloaded", timeout=15000)
-            try:
-                await page.wait_for_load_state("networkidle", timeout=10000)
-            except Exception:
-                await page.wait_for_timeout(2000)
-        except Exception as e:
-            logger.debug("Failed to restore web storage: %s", e)
+        from src.utils.web_storage import restore_web_storage
+        await restore_web_storage(page, storage)

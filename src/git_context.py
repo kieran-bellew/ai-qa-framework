@@ -93,6 +93,7 @@ class GitContextProvider:
         # 2. Diff stat — compact summary of what changed (cap: 10% of budget)
         stat_cap = min(budget // 5, 1500)
         diff_stat = self._get_diff_stat(max_chars=stat_cap)
+        budget -= len(diff_stat)
 
         # 3. README — app overview (cap: 30% of budget)
         readme_cap = min(budget // 3, 3000)
