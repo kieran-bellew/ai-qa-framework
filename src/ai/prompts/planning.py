@@ -73,6 +73,7 @@ REQUIRED RESPONSE FORMAT (plain JSON, no markdown fences):
    - For page load verification: prefer `page_loaded` (verifies page is not blank, optionally checks for a key element) or `page_title_contains` with a short keyword (e.g., "Products" not "Products - My Store | Home"). AVOID using `text_contains` or `text_equals` with selector "title" — page titles are dynamic and frequently include CMS-appended suffixes, separators, or A/B test variants that break exact matches. Use `url_matches` or `page_loaded` for reliable page load checks.
    - **Console error assertions**: Use `no_console_errors` sparingly — only as a secondary assertion, not the primary success indicator. Modern SPAs often emit benign console errors (third-party scripts, dev warnings, CSP violations) that cause false failures. Prefer behavioral assertions (element_visible, url_matches, ai_evaluate) as primary assertions, and add `no_console_errors` only when testing for JavaScript crashes or critical runtime errors.
    - **ai_evaluate assertions**: When using `ai_evaluate`, describe the EXPECTED behavior precisely, not what you imagine the page looks like. Only assert things observable from the site model data. Do NOT assume specific UI layouts, menu structures, or text that isn't in the site model.
+   - **Do NOT invent column names, field labels, or UI text** that doesn't appear in the site model. If you need to verify a data grid has content, use `ai_evaluate` with intent "verify the data grid shows rows of data" rather than asserting specific column headers you haven't observed.
 9. **Auth-aware tests:** Each test runs in a fully isolated browser context with no shared state between tests.
    - If the site model has `"has_auth": true`, authentication is configured. The framework captures an authenticated session once and injects it (cookies + localStorage) into each test's isolated browser context automatically. You do NOT need to add login steps as preconditions for tests on auth-protected pages.
    - Set `"requires_auth": true` (the default) for tests that need an authenticated session. The framework will inject saved auth state into the test's context.
@@ -122,6 +123,7 @@ Each workflow test should have 3-8 steps and 2-4 assertions. Assert state at key
 When form fields include `interaction_pattern` and `interaction_steps`, use them:
 
 - **mat_select**: Do NOT use a `select` action. Instead: (1) click the trigger selector to open the dropdown, (2) wait 500ms, (3) use a click action on the `mat-option` with the desired text. Use `text=OptionText` as the selector for the option.
+  - NEVER assert on `.mat-mdc-select-panel` or `.cdk-overlay-pane` — these elements only exist while the dropdown is open and disappear immediately after selection. Assert on the selected value text instead.
 - **mat_datepicker**: Fill the input directly with a date string (e.g., "01/15/2025").
 - **mat_checkbox** / **mat_slide_toggle**: Use a click action on the component selector.
 - **wizard forms** (`form_pattern: "wizard"`): Generate tests that complete all wizard steps in sequence. Use click to advance to each step via "Next" or step header buttons.

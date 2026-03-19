@@ -52,6 +52,78 @@ def resolve_dynamic_vars_for_test_case(actions: list[Action]) -> None:
             action.value = _resolve_dynamic_vars(action.value, resolved)
 
 
+async def _expand_menu_and_find_link(page: Page, target_path: str) -> str | None:
+    """Try expanding sidebar/nav menu sections to reveal a hidden link.
+
+    Angular Material apps often have expandable menu groups (mat-expansion-panel,
+    mat-nav-list with nested items, etc.) that hide sub-links until clicked.
+    """
+    try:
+        result = await page.evaluate("""(targetPath) => {
+            // Find expandable menu items that might contain the target
+            const expanders = document.querySelectorAll(
+                'mat-expansion-panel-header, [mat-list-item], ' +
+                '.mat-mdc-list-item, .nav-group-toggle, ' +
+                '[class*="menu-group"], [class*="nav-parent"], ' +
+                'a[class*="menu-item"]:not([href])'
+            );
+
+            // Extract the last path segment as a keyword to match
+            const segments = targetPath.replace(/^\\//, '').split('/');
+            const keyword = segments[segments.length - 1].toLowerCase();
+            // Also try parent segment (e.g., "supply" for "/supply/lots")
+            const parentKeyword = segments.length > 1 ? segments[segments.length - 2].toLowerCase() : '';
+
+            for (const exp of expanders) {
+                const text = (exp.textContent || '').trim().toLowerCase();
+                // Check if this menu section might contain our target
+                if (parentKeyword && text.includes(parentKeyword)) {
+                    // Click to expand
+                    exp.click();
+                    return { expanded: text, selector: null };
+                }
+            }
+            return null;
+        }""", target_path)
+
+        if result and result.get("expanded"):
+            # Wait for expansion animation
+            await page.wait_for_timeout(500)
+
+            # Now search for the link again
+            from urllib.parse import urlparse as _urlparse
+            nav_selector = await page.evaluate("""(targetPath) => {
+                const candidates = document.querySelectorAll(
+                    'a[href], a[routerLink], a[routerlink], [routerLink], [routerlink]'
+                );
+                for (const el of candidates) {
+                    const href = el.getAttribute('href') || '';
+                    const rl = el.getAttribute('routerLink') || el.getAttribute('routerlink') || '';
+                    const match = [href, rl].some(v => {
+                        const clean = v.replace(/^#/, '').replace(/\\?.*$/, '').replace(/\\/$/, '');
+                        return clean === targetPath || clean === targetPath.replace(/^\\//,'');
+                    });
+                    if (match && el.offsetParent !== null) {
+                        if (el.id) return '#' + CSS.escape(el.id);
+                        if (el.getAttribute('data-testid'))
+                            return '[data-testid="' + el.getAttribute('data-testid') + '"]';
+                        if (el.getAttribute('routerLink'))
+                            return '[routerLink="' + el.getAttribute('routerLink') + '"]';
+                        if (el.getAttribute('routerlink'))
+                            return '[routerlink="' + el.getAttribute('routerlink') + '"]';
+                        return null;
+                    }
+                }
+                return null;
+            }""", target_path)
+            return nav_selector
+
+    except Exception as e:
+        logger.debug("Menu expansion failed: %s", e)
+
+    return None
+
+
 async def _resolve_effective_selector(
     page: Page,
     selector: str,
@@ -154,9 +226,23 @@ async def run_action(
                     pass
                 await wait_for_stable(page, timeout_ms=5000)
             else:
-                logger.debug("SPA navigate: no nav link found for %s, falling back to goto", target_path)
-                await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
-                await wait_for_stable(page, timeout_ms=min(timeout, 10000))
+                # Try expanding parent menu sections to reveal the link
+                nav_selector = await _expand_menu_and_find_link(page, target_path)
+                if nav_selector:
+                    logger.debug("SPA navigate: found '%s' after expanding menu", nav_selector)
+                    await page.click(nav_selector, timeout=timeout)
+                    try:
+                        await page.wait_for_url(
+                            lambda u: target_path in urlparse(u).path,
+                            timeout=timeout,
+                        )
+                    except Exception:
+                        pass
+                    await wait_for_stable(page, timeout_ms=5000)
+                else:
+                    logger.debug("SPA navigate: no nav link for %s, falling back to goto", target_path)
+                    await page.goto(url, wait_until="domcontentloaded", timeout=timeout)
+                    await wait_for_stable(page, timeout_ms=min(timeout, 10000))
 
         case "click":
             if not action.selector:
