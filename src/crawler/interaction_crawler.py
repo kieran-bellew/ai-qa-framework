@@ -794,26 +794,8 @@ class InteractionCrawler:
     @staticmethod
     async def _dismiss_overlays(page: Page) -> None:
         """Dismiss open Angular CDK overlays/menus/dialogs that block clicks."""
-        try:
-            dismissed = await page.evaluate("""() => {
-                let count = 0;
-                // Click CDK overlay backdrops to close menus/dialogs
-                document.querySelectorAll('.cdk-overlay-backdrop').forEach(el => {
-                    el.click();
-                    count++;
-                });
-                return count;
-            }""")
-            if dismissed:
-                await page.wait_for_timeout(300)
-        except Exception:
-            pass
-        # Also try Escape key as a universal dismiss
-        try:
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(200)
-        except Exception:
-            pass
+        from src.utils.cdk_overlay import dismiss_cdk_overlays
+        await dismiss_cdk_overlays(page)
 
     @staticmethod
     async def _restore_web_storage(page: Page, storage: dict) -> None:

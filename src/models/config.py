@@ -184,10 +184,6 @@ class FrameworkConfig(BaseModel):
             raise ValueError(f"ai_provider must be one of {valid}, got '{v}'")
         return provider
 
-    # Scope
-    include_url_patterns: list[str] = Field(default_factory=list)
-    exclude_url_patterns: list[str] = Field(default_factory=list)
-
     # Hints
     hints: list[str] = Field(default_factory=list)
 

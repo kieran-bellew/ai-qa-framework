@@ -10,7 +10,8 @@ from playwright.async_api import Page
 
 from src.models.test_plan import Action
 from src.utils.browser_stealth import human_delay
-from src.utils.smart_wait import wait_for_stable, wait_after_action
+from src.utils.cdk_overlay import dismiss_cdk_overlays
+from src.utils.smart_wait import wait_for_stable
 from .selector_resolver import resolve_selector
 
 logger = logging.getLogger(__name__)
@@ -51,30 +52,6 @@ def resolve_dynamic_vars_for_test_case(actions: list[Action]) -> None:
             action.value = _resolve_dynamic_vars(action.value, resolved)
 
 
-async def _dismiss_cdk_overlays(page: Page) -> None:
-    """Dismiss open Angular CDK overlays/menus that block pointer events."""
-    try:
-        dismissed = await page.evaluate("""() => {
-            let count = 0;
-            // Click backdrop to close any open overlay (menu, select panel, dialog)
-            document.querySelectorAll('.cdk-overlay-backdrop').forEach(el => {
-                el.click();
-                count++;
-            });
-            return count;
-        }""")
-        if dismissed:
-            await page.wait_for_timeout(300)
-    except Exception:
-        pass
-    # Also try Escape as universal dismiss
-    try:
-        await page.keyboard.press("Escape")
-        await page.wait_for_timeout(200)
-    except Exception:
-        pass
-
-
 async def _resolve_effective_selector(
     page: Page,
     selector: str,
@@ -82,7 +59,6 @@ async def _resolve_effective_selector(
     action_type: str,
     smart_resolve: bool,
     selector_cache=None,
-    element_baselines=None,
 ) -> str:
     """Resolve the effective selector using smart resolution if enabled.
 
@@ -97,7 +73,6 @@ async def _resolve_effective_selector(
         action_type=action_type,
         selector_cache=selector_cache,
         page_url=page.url,
-        element_baselines=element_baselines,
     )
     if result.resolved_selector:
         if result.strategy_used != "original":
@@ -110,7 +85,7 @@ async def _resolve_effective_selector(
 
 async def run_action(
     page: Page, action: Action, timeout: int = 10000, smart_resolve: bool = True,
-    selector_cache=None, element_baselines=None,
+    selector_cache=None,
 ) -> None:
     """Execute a single action on the Playwright page.
 
@@ -188,25 +163,20 @@ async def run_action(
                 raise ValueError("click action requires a selector")
             await human_delay(page, min_ms=50, max_ms=250)
             # Dismiss any open CDK overlays that block pointer events
-            await _dismiss_cdk_overlays(page)
+            await dismiss_cdk_overlays(page)
             effective = await _resolve_effective_selector(
                 page, action.selector, timeout, "click", smart_resolve,
-                selector_cache, element_baselines)
-            if effective.startswith("__visual_match:"):
-                coords = effective.replace("__visual_match:", "").split(",")
-                await page.mouse.click(int(coords[0]), int(coords[1]))
-            else:
-                logger.debug("Clicking: %s", effective)
-                try:
+                selector_cache)
+            logger.debug("Clicking: %s", effective)
+            try:
+                await page.click(effective, timeout=timeout)
+            except Exception as click_err:
+                if "intercepts pointer events" in str(click_err):
+                    logger.debug("Overlay blocking click, dismissing and retrying")
+                    await dismiss_cdk_overlays(page)
                     await page.click(effective, timeout=timeout)
-                except Exception as click_err:
-                    # Retry after dismissing overlays (may have appeared during resolve)
-                    if "intercepts pointer events" in str(click_err):
-                        logger.debug("Overlay blocking click, dismissing and retrying")
-                        await _dismiss_cdk_overlays(page)
-                        await page.click(effective, timeout=timeout)
-                    else:
-                        raise
+                else:
+                    raise
 
         case "fill":
             if not action.selector:
@@ -280,9 +250,3 @@ async def run_action(
         case _:
             logger.warning("Unknown action type: %s", action.action_type)
 
-    # Capture element baseline after successful interaction (for visual recovery)
-    if element_baselines and action.selector and action.action_type in ("click", "fill", "select"):
-        try:
-            await element_baselines.capture_element(page, action.selector, action.action_type)
-        except Exception:
-            pass

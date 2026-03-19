@@ -134,8 +134,6 @@ class TestResolveSelector:
 
         assert result.resolved_selector == "button#submit"
         assert result.strategy_used == "original"
-        assert len(result.attempts) == 1
-        assert result.attempts[0]["success"] is True
 
     async def test_fallback_to_id_alternative(self):
         """When original fails but broadened ID selector works."""
@@ -211,7 +209,6 @@ class TestResolveSelector:
 
         assert result.resolved_selector is None
         assert result.strategy_used == "none"
-        assert len(result.attempts) >= 2  # At least original + DOM stability retry
 
     async def test_timeout_passed_to_first_attempt(self):
         """The configured timeout is used for the original selector attempt."""

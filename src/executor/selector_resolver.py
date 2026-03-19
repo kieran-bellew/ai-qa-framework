@@ -13,15 +13,9 @@ logger = logging.getLogger(__name__)
 class SelectorResolutionResult:
     """Result of a selector resolution attempt."""
 
-    def __init__(
-        self,
-        resolved_selector: str | None,
-        strategy_used: str,
-        attempts: list[dict],
-    ):
+    def __init__(self, resolved_selector: str | None, strategy_used: str):
         self.resolved_selector = resolved_selector
         self.strategy_used = strategy_used
-        self.attempts = attempts  # [{strategy, selector, success}]
 
 
 async def resolve_selector(
@@ -31,7 +25,6 @@ async def resolve_selector(
     action_type: str = "",
     selector_cache=None,
     page_url: str = "",
-    element_baselines=None,
 ) -> SelectorResolutionResult:
     """Try to find an element using progressively broader strategies.
 
@@ -45,95 +38,44 @@ async def resolve_selector(
     Returns a SelectorResolutionResult. If resolved_selector is None,
     all strategies failed.
     """
-    attempts: list[dict] = []
-
-    # Strategy 0: Check selector cache for a previously-learned replacement
+    # Strategy 0: Check selector cache
     if selector_cache is not None:
         cached = selector_cache.find(original_selector, page_url=page_url)
         if cached:
-            cache_timeout = min(3000, timeout_ms)
-            if await _try_selector(page, cached.replacement_selector, cache_timeout):
-                logger.info(
-                    "Cache hit: '%s' -> '%s' (confidence=%.2f)",
-                    original_selector, cached.replacement_selector, cached.confidence,
-                )
+            if await _try_selector(page, cached.replacement_selector, min(3000, timeout_ms)):
+                logger.info("Cache hit: '%s' -> '%s'", original_selector, cached.replacement_selector)
                 selector_cache.record_success(
                     original_selector, cached.replacement_selector,
                     page_url=page_url, action_type=action_type, source="cache_hit",
                 )
-                return SelectorResolutionResult(
-                    resolved_selector=cached.replacement_selector,
-                    strategy_used="cache",
-                    attempts=[{"strategy": "cache", "selector": cached.replacement_selector, "success": True}],
-                )
+                return SelectorResolutionResult(cached.replacement_selector, "cache")
             else:
-                logger.debug("Cache miss (element not found): '%s'", cached.replacement_selector)
                 selector_cache.record_failure(original_selector, page_url=page_url)
-                attempts.append({"strategy": "cache", "selector": cached.replacement_selector, "success": False})
 
-    # Strategy 1: Original selector with the full configured timeout
+    # Strategy 1: Original selector
     if await _try_selector(page, original_selector, timeout_ms):
-        return SelectorResolutionResult(
-            resolved_selector=original_selector,
-            strategy_used="original",
-            attempts=[{"strategy": "original", "selector": original_selector, "success": True}],
-        )
-    attempts.append({"strategy": "original", "selector": original_selector, "success": False})
-    logger.debug("Smart resolve: original selector '%s' not found, trying alternatives", original_selector)
+        return SelectorResolutionResult(original_selector, "original")
+    logger.debug("Smart resolve: original '%s' not found, trying alternatives", original_selector)
 
-    # Strategy 2: Derive alternative selectors and try each with a short timeout
+    # Strategy 2: Derived alternatives
     alt_timeout_ms = min(2000, timeout_ms // 3)
-    alternatives = _derive_alternatives(original_selector, action_type)
-    for alt_strategy, alt_selector in alternatives:
+    for alt_strategy, alt_selector in _derive_alternatives(original_selector, action_type):
         if await _try_selector(page, alt_selector, alt_timeout_ms):
-            logger.info(
-                "Smart resolve: '%s' -> '%s' via %s",
-                original_selector, alt_selector, alt_strategy,
-            )
-            return SelectorResolutionResult(
-                resolved_selector=alt_selector,
-                strategy_used=alt_strategy,
-                attempts=attempts + [{"strategy": alt_strategy, "selector": alt_selector, "success": True}],
-            )
-        attempts.append({"strategy": alt_strategy, "selector": alt_selector, "success": False})
+            logger.info("Smart resolve: '%s' -> '%s' via %s", original_selector, alt_selector, alt_strategy)
+            return SelectorResolutionResult(alt_selector, alt_strategy)
 
-    # Strategy 3: Wait for DOM stability then retry original
-    stability_timeout = min(2000, timeout_ms // 4)
+    # Strategy 3: DOM stability wait + retry
     try:
-        await page.wait_for_load_state("networkidle", timeout=stability_timeout)
+        await page.wait_for_load_state("networkidle", timeout=min(2000, timeout_ms // 4))
     except Exception:
         pass
     if await _try_selector(page, original_selector, alt_timeout_ms):
         logger.info("Smart resolve: '%s' succeeded after DOM stability wait", original_selector)
-        return SelectorResolutionResult(
-            resolved_selector=original_selector,
-            strategy_used="dom_stability_retry",
-            attempts=attempts + [{"strategy": "dom_stability_retry", "selector": original_selector, "success": True}],
-        )
-    attempts.append({"strategy": "dom_stability_retry", "selector": original_selector, "success": False})
-
-    # Strategy 4: Visual element matching (find by baseline screenshot)
-    if element_baselines:
-        try:
-            visual_match = await element_baselines.find_element_visually(page, original_selector)
-            if visual_match:
-                logger.info("Smart resolve: '%s' found via visual matching", original_selector)
-                return SelectorResolutionResult(
-                    resolved_selector=visual_match,
-                    strategy_used="visual_match",
-                    attempts=attempts + [{"strategy": "visual_match", "selector": visual_match, "success": True}],
-                )
-        except Exception as e:
-            logger.debug("Visual matching failed: %s", e)
-        attempts.append({"strategy": "visual_match", "selector": "", "success": False})
+        return SelectorResolutionResult(original_selector, "dom_stability_retry")
 
     # All strategies exhausted
-    logger.debug("Smart resolve: all strategies failed for '%s' (%d attempts)", original_selector, len(attempts))
-    return SelectorResolutionResult(
-        resolved_selector=None,
-        strategy_used="none",
-        attempts=attempts,
-    )
+    logger.debug("Smart resolve: all strategies failed for '%s'", original_selector)
+    return SelectorResolutionResult(None, "none")
 
 
 async def _try_selector(page: Page, selector: str, timeout_ms: int) -> bool:

@@ -112,7 +112,6 @@ class Executor:
             # so subsequent tests skip the replay entirely (~15-20s savings per test).
             self._post_auth_cache: dict[str, Any] = {}
             self._post_auth_cache_lock = asyncio.Lock()
-            self._post_auth_cache_ready = asyncio.Event()
 
             async def _run_one(index: int, tc: TestCase) -> TestResult:
                 async with semaphore:
@@ -440,7 +439,7 @@ class Executor:
                 if not self._logged_in_selector:
                     self._logged_in_selector = await self._discover_logged_in_indicator(page)
 
-                self._post_auth_cache_ready.set()
+
                 logger.info("Post-auth state cached (url=%s, %d session keys)",
                            page.url, len(session_storage))
             except Exception as e:

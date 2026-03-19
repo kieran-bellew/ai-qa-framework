@@ -75,25 +75,3 @@ async def wait_for_stable(
     except Exception:
         # Strategy 4: Fallback
         await page.wait_for_timeout(min(1000, timeout_ms))
-
-
-async def wait_after_action(
-    page: Page,
-    action_type: str = "",
-    timeout_ms: int = 5000,
-) -> None:
-    """Wait after an action with action-type-appropriate strategy.
-
-    Navigate/spa_navigate: full stability wait.
-    Click: short stability wait (might trigger transitions).
-    Fill/select: minimal wait (just change detection).
-    """
-    match action_type:
-        case "navigate" | "spa_navigate":
-            await wait_for_stable(page, timeout_ms=timeout_ms)
-        case "click":
-            await wait_for_stable(page, timeout_ms=min(timeout_ms, 3000), poll_ms=200)
-        case "fill" | "select":
-            await page.wait_for_timeout(100)
-        case _:
-            await page.wait_for_timeout(200)
