@@ -4,8 +4,27 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 import uuid
+
+# Dynamic Angular IDs to strip from selectors sent to the planner
+_DYNAMIC_ID_PATTERNS = re.compile(
+    r"#(?:mat-select|mat-input|mat-option|mat-checkbox|mat-radio|mat-tab|"
+    r"mat-menu-panel|cdk-overlay|cdk-describedby-message|mat-autocomplete|"
+    r"mat-chip|mat-slide-toggle|mat-datepicker)-\d+"
+)
+
+
+def _sanitize_selector(selector: str) -> str:
+    """Strip dynamic Angular Material IDs from selectors.
+
+    Prevents the AI from generating tests with fragile IDs like #mat-select-12.
+    """
+    if _DYNAMIC_ID_PATTERNS.search(selector):
+        return "(dynamic-id-removed)"
+    return selector
+
 
 from src.ai.client import AIClient
 from src.ai.prompts.planning import PLANNING_SYSTEM_PROMPT, build_planning_prompt
@@ -261,7 +280,7 @@ class Planner:
                 ],
                 "key_elements": [
                     {
-                        "selector": e.selector,
+                        "selector": _sanitize_selector(e.selector),
                         "type": e.element_type,
                         "text": e.text_content[:50],
                     }

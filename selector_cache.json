@@ -12,7 +12,7 @@
       "last_success": "2026-03-18T16:06:38Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7499999999999998
+      "confidence": 0.6999999999999997
     },
     {
       "original_selector": "[name='mat-input-0']",
@@ -24,7 +24,7 @@
       "last_success": "2026-03-18T16:13:44Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7499999999999998
+      "confidence": 0.6999999999999997
     },
     {
       "original_selector": "[name='mat-input-0']",
@@ -36,7 +36,7 @@
       "last_success": "2026-03-18T16:13:44Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7499999999999998
+      "confidence": 0.6999999999999997
     },
     {
       "original_selector": "[name='mat-input-0']",
@@ -48,7 +48,7 @@
       "last_success": "2026-03-18T16:14:51Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7499999999999998
+      "confidence": 0.6999999999999997
     },
     {
       "original_selector": "#mat-select-12",
@@ -60,7 +60,7 @@
       "last_success": "2026-03-18T17:03:31Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7999999999999998
+      "confidence": 0.7499999999999998
     },
     {
       "original_selector": "th[role='columnheader']:first-child",
@@ -72,7 +72,7 @@
       "last_success": "2026-03-18T17:06:12Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7999999999999998
+      "confidence": 0.7499999999999998
     },
     {
       "original_selector": "th[role='columnheader']:first-child",
@@ -84,7 +84,7 @@
       "last_success": "2026-03-18T17:12:39Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7999999999999998
+      "confidence": 0.7499999999999998
     },
     {
       "original_selector": "#mat-input-41",
@@ -96,7 +96,7 @@
       "last_success": "2026-03-18T17:13:09Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.7999999999999998
+      "confidence": 0.7499999999999998
     },
     {
       "original_selector": "button[type='submit'], input[type='submit'], role=button[name='Sign In'], role=button[name='Login'], role=button[name='Log in']",
@@ -108,8 +108,20 @@
       "last_success": "2026-03-18T17:33:01Z",
       "last_failure": "",
       "source": "ai_fallback",
-      "confidence": 0.8499999999999999
+      "confidence": 0.7999999999999998
+    },
+    {
+      "original_selector": "input[name='mat-input-17']",
+      "replacement_selector": "input[type='text'][matinput]",
+      "page_url_pattern": "/reports/depot_inventory_detail",
+      "action_type": "fill",
+      "success_count": 2,
+      "failure_count": 0,
+      "last_success": "2026-03-18T21:24:20Z",
+      "last_failure": "",
+      "source": "ai_fallback",
+      "confidence": 1.0
     }
   ],
-  "updated_at": "2026-03-18T21:07:07Z"
+  "updated_at": "2026-03-18T21:26:42Z"
 }
